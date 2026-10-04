@@ -45,6 +45,12 @@ impl ScreenshotFile {
         original_path: PathBuf,
         created_at: Option<SystemTime>,
     ) -> Result<Self, ScreenshotFileError> {
+        if has_trailing_separator(&original_path) {
+            return Err(ScreenshotFileError::MissingFilename {
+                path: original_path,
+            });
+        }
+
         let filename = original_path
             .file_name()
             .map(OsStr::to_owned)
@@ -85,6 +91,13 @@ impl ScreenshotFile {
     pub fn transition_to(&mut self, state: ProcessingState) {
         self.state = state;
     }
+}
+
+fn has_trailing_separator(path: &Path) -> bool {
+    let path = path.as_os_str().to_string_lossy();
+
+    path.ends_with(std::path::MAIN_SEPARATOR)
+        || cfg!(windows) && (path.ends_with('/') || path.ends_with('\\'))
 }
 
 #[cfg(test)]
@@ -135,6 +148,21 @@ mod tests {
     #[test]
     fn rejects_a_path_without_a_filename() {
         let original_path = PathBuf::from(r"C:\");
+
+        let error = ScreenshotFile::new(original_path.clone(), None).unwrap_err();
+
+        assert_eq!(
+            error,
+            ScreenshotFileError::MissingFilename {
+                path: original_path
+            }
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_an_explicit_directory_style_path() {
+        let original_path = PathBuf::from(r"C:\Screenshots\");
 
         let error = ScreenshotFile::new(original_path.clone(), None).unwrap_err();
 
