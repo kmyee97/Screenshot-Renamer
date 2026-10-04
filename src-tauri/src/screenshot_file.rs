@@ -116,8 +116,8 @@ mod tests {
 
     #[test]
     fn keeps_an_extensionless_filename_intact() {
-        let screenshot = ScreenshotFile::new(PathBuf::from(r"C:\Screenshots\Screenshot_141922"), None)
-            .unwrap();
+        let screenshot =
+            ScreenshotFile::new(PathBuf::from(r"C:\Screenshots\Screenshot_141922"), None).unwrap();
 
         assert_eq!(screenshot.filename(), OsStr::new("Screenshot_141922"));
         assert_eq!(screenshot.extension(), None);
@@ -125,8 +125,8 @@ mod tests {
 
     #[test]
     fn uses_only_the_final_extension_for_multi_dot_filenames() {
-        let screenshot = ScreenshotFile::new(PathBuf::from(r"C:\Screenshots\report.final.png"), None)
-            .unwrap();
+        let screenshot =
+            ScreenshotFile::new(PathBuf::from(r"C:\Screenshots\report.final.png"), None).unwrap();
 
         assert_eq!(screenshot.filename(), OsStr::new("report.final.png"));
         assert_eq!(screenshot.extension(), Some(OsStr::new("png")));
@@ -138,7 +138,12 @@ mod tests {
 
         let error = ScreenshotFile::new(original_path.clone(), None).unwrap_err();
 
-        assert_eq!(error, ScreenshotFileError::MissingFilename { path: original_path });
+        assert_eq!(
+            error,
+            ScreenshotFileError::MissingFilename {
+                path: original_path
+            }
+        );
     }
 
     #[test]
