@@ -40,6 +40,18 @@ pub enum ProcessingStage {
     Rename,
 }
 
+pub fn is_supported_image_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("png")
+                    || extension.eq_ignore_ascii_case("jpg")
+                    || extension.eq_ignore_ascii_case("jpeg")
+            })
+}
+
 impl ScreenshotFile {
     pub fn new(
         original_path: PathBuf,
@@ -108,7 +120,10 @@ mod tests {
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    use super::{ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError};
+    use super::{
+        is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile,
+        ScreenshotFileError,
+    };
 
     #[test]
     fn preserves_source_facts_for_a_screenshot_file() {
@@ -143,6 +158,37 @@ mod tests {
 
         assert_eq!(screenshot.filename(), OsStr::new("report.final.png"));
         assert_eq!(screenshot.extension(), Some(OsStr::new("png")));
+    }
+
+    #[test]
+    fn accepts_png_jpg_and_jpeg_files_regardless_of_extension_case() {
+        let temp_dir = tempfile::tempdir().expect("create temporary directory");
+
+        for filename in ["screenshot.png", "photo.JPG", "capture.Jpeg"] {
+            let path = temp_dir.path().join(filename);
+            std::fs::write(&path, "image fixture").expect("create image fixture");
+
+            assert!(
+                is_supported_image_file(&path),
+                "expected {filename} to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unrelated_files_extensionless_files_and_directories() {
+        let temp_dir = tempfile::tempdir().expect("create temporary directory");
+        let text_file = temp_dir.path().join("notes.txt");
+        let extensionless_file = temp_dir.path().join("screenshot");
+        let directory = temp_dir.path().join("nested");
+
+        std::fs::write(&text_file, "not an image").expect("create text fixture");
+        std::fs::write(&extensionless_file, "not an image").expect("create extensionless fixture");
+        std::fs::create_dir(&directory).expect("create directory fixture");
+
+        assert!(!is_supported_image_file(&text_file));
+        assert!(!is_supported_image_file(&extensionless_file));
+        assert!(!is_supported_image_file(&directory));
     }
 
     #[test]
