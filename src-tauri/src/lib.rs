@@ -5,7 +5,10 @@ use tauri::{AppHandle, Emitter, State};
 pub mod folder_watcher;
 pub mod screenshot_file;
 
-pub use folder_watcher::{FolderWatcher, FolderWatcherError, FolderWatcherProcessor};
+pub use folder_watcher::{
+    wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
+    ReadinessError,
+};
 pub use screenshot_file::{
     is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
 };

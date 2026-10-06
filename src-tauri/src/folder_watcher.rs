@@ -1,15 +1,88 @@
 use std::{
     collections::HashSet,
     fmt,
+    fs::OpenOptions,
+    io::Read,
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::{is_supported_image_file, ScreenshotFile};
+
+const READINESS_TIMEOUT: Duration = Duration::from_secs(2);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Debug)]
+pub enum ReadinessError {
+    TimedOut { path: PathBuf, timeout: Duration },
+}
+
+impl fmt::Display for ReadinessError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TimedOut { path, timeout } => write!(
+                formatter,
+                "file did not become ready within {:?}: {}",
+                timeout,
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReadinessError {}
+
+pub fn wait_for_file_readiness(
+    path: &std::path::Path,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<(), ReadinessError> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if file_is_ready(path, poll_interval) {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(ReadinessError::TimedOut {
+                path: path.to_path_buf(),
+                timeout,
+            });
+        }
+
+        thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
+    }
+}
+
+fn file_is_ready(path: &std::path::Path, poll_interval: Duration) -> bool {
+    let Ok(initial_metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !initial_metadata.is_file() {
+        return false;
+    }
+
+    let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    let mut contents = Vec::new();
+    if file.read_to_end(&mut contents).is_err() {
+        return false;
+    }
+
+    thread::sleep(poll_interval);
+
+    let Ok(final_metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    final_metadata.is_file() && final_metadata.len() == initial_metadata.len()
+}
 
 #[derive(Debug)]
 pub enum FolderWatcherError {
@@ -69,6 +142,11 @@ impl FolderWatcherProcessor {
                 continue;
             };
             if !self.emitted_paths.insert(canonical_path.clone()) {
+                continue;
+            }
+
+            if wait_for_file_readiness(path, READINESS_TIMEOUT, READINESS_POLL_INTERVAL).is_err() {
+                self.emitted_paths.remove(&canonical_path);
                 continue;
             }
 
@@ -173,15 +251,20 @@ fn run_worker<F>(
 #[cfg(test)]
 mod tests {
     use std::{
+        fs::OpenOptions,
         path::PathBuf,
         sync::{Arc, Mutex},
-        time::Duration,
+        thread,
+        time::{Duration, Instant},
     };
 
     use notify::{event::CreateKind, Event, EventKind};
     use tempfile::tempdir;
 
-    use super::{FolderWatcher, FolderWatcherError, FolderWatcherProcessor};
+    use super::{
+        wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
+        ReadinessError,
+    };
     use crate::ProcessingState;
 
     fn create_event(path: PathBuf) -> Event {
@@ -190,6 +273,52 @@ mod tests {
             paths: vec![path],
             attrs: Default::default(),
         }
+    }
+
+    #[test]
+    fn waits_until_a_screenshot_is_created_and_stable() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("Screenshot.png");
+        let writer_path = path.clone();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(40));
+            std::fs::write(&writer_path, b"image data").unwrap();
+        });
+
+        wait_for_file_readiness(&path, Duration::from_millis(500), Duration::from_millis(10))
+            .unwrap();
+    }
+
+    #[test]
+    fn times_out_when_a_screenshot_never_becomes_ready() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("Screenshot.png");
+        let started = Instant::now();
+
+        let error =
+            wait_for_file_readiness(&path, Duration::from_millis(60), Duration::from_millis(10))
+                .unwrap_err();
+
+        assert!(matches!(error, ReadinessError::TimedOut { .. }));
+        assert!(started.elapsed() >= Duration::from_millis(60));
+    }
+
+    #[test]
+    fn waits_for_a_file_that_is_still_being_written() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("Screenshot.png");
+        std::fs::write(&path, b"first").unwrap();
+        let writer_path = path.clone();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            let mut file = OpenOptions::new().append(true).open(writer_path).unwrap();
+            std::io::Write::write_all(&mut file, b" second").unwrap();
+        });
+
+        wait_for_file_readiness(&path, Duration::from_millis(500), Duration::from_millis(10))
+            .unwrap();
     }
 
     #[test]
