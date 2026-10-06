@@ -1,14 +1,59 @@
+use std::{path::PathBuf, sync::Mutex};
+
+use tauri::{AppHandle, Emitter, State};
+
 pub mod folder_watcher;
 pub mod screenshot_file;
 
+pub use folder_watcher::{FolderWatcher, FolderWatcherError, FolderWatcherProcessor};
 pub use screenshot_file::{
     is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
 };
+
+#[derive(Default)]
+pub struct WatcherState(Mutex<Option<FolderWatcher>>);
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn start_watching(
+    app: AppHandle,
+    state: State<'_, WatcherState>,
+    directory: String,
+) -> Result<(), String> {
+    let watcher = FolderWatcher::start(PathBuf::from(directory), move |file| {
+        let path = file.original_path().to_string_lossy().into_owned();
+        let _ = app.emit("screenshot-detected", path);
+    })
+    .map_err(|error| error.to_string())?;
+
+    let mut active_watcher = state
+        .0
+        .lock()
+        .map_err(|_| "watcher state is unavailable".to_owned())?;
+    if let Some(previous_watcher) = active_watcher.as_mut() {
+        previous_watcher.stop().map_err(|error| error.to_string())?;
+    }
+    *active_watcher = Some(watcher);
+
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_watching(state: State<'_, WatcherState>) -> Result<(), String> {
+    let mut active_watcher = state
+        .0
+        .lock()
+        .map_err(|_| "watcher state is unavailable".to_owned())?;
+    if let Some(mut watcher) = active_watcher.take() {
+        watcher.stop().map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -42,7 +87,12 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(WatcherState::default())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            start_watching,
+            stop_watching
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

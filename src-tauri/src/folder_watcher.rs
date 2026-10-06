@@ -1,6 +1,13 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fmt,
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
-use notify::{Event, EventKind};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::{is_supported_image_file, ScreenshotFile};
 
@@ -11,6 +18,21 @@ pub enum FolderWatcherError {
     Watcher(String),
     Stop(String),
 }
+
+impl fmt::Display for FolderWatcherError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WatcherEvent(message) => write!(formatter, "watcher event error: {message}"),
+            Self::InvalidDirectory(path) => {
+                write!(formatter, "not a valid directory: {}", path.display())
+            }
+            Self::Watcher(message) => write!(formatter, "watcher error: {message}"),
+            Self::Stop(message) => write!(formatter, "watcher stop error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for FolderWatcherError {}
 
 pub struct FolderWatcherProcessor {
     emitted_paths: HashSet<PathBuf>,
@@ -68,14 +90,98 @@ impl Default for FolderWatcherProcessor {
     }
 }
 
+pub struct FolderWatcher {
+    stop_sender: Option<Sender<()>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl FolderWatcher {
+    pub fn start<F>(directory: PathBuf, on_file: F) -> Result<Self, FolderWatcherError>
+    where
+        F: Fn(ScreenshotFile) + Send + Sync + 'static,
+    {
+        if !directory.is_dir() {
+            return Err(FolderWatcherError::InvalidDirectory(directory));
+        }
+
+        let (event_sender, event_receiver) = mpsc::sync_channel(64);
+        let mut watcher = notify::recommended_watcher(move |event| {
+            let _ = event_sender.send(event);
+        })
+        .map_err(|error| FolderWatcherError::Watcher(error.to_string()))?;
+        watcher
+            .watch(&directory, RecursiveMode::NonRecursive)
+            .map_err(|error| FolderWatcherError::Watcher(error.to_string()))?;
+
+        let (stop_sender, stop_receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            run_worker(watcher, event_receiver, stop_receiver, on_file);
+        });
+
+        Ok(Self {
+            stop_sender: Some(stop_sender),
+            worker: Some(worker),
+        })
+    }
+
+    pub fn stop(&mut self) -> Result<(), FolderWatcherError> {
+        if let Some(sender) = self.stop_sender.take() {
+            let _ = sender.send(());
+        }
+
+        if let Some(worker) = self.worker.take() {
+            worker
+                .join()
+                .map_err(|_| FolderWatcherError::Stop("watcher worker panicked".to_owned()))?;
+        }
+
+        Ok(())
+    }
+}
+
+fn run_worker<F>(
+    _watcher: RecommendedWatcher,
+    event_receiver: Receiver<Result<Event, notify::Error>>,
+    stop_receiver: Receiver<()>,
+    on_file: F,
+) where
+    F: Fn(ScreenshotFile),
+{
+    let mut processor = FolderWatcherProcessor::new();
+
+    loop {
+        match stop_receiver.try_recv() {
+            Ok(()) | Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {}
+        }
+
+        match event_receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(Ok(event)) => {
+                if let Ok(files) = processor.process_event(&event) {
+                    for file in files {
+                        on_file(file);
+                    }
+                }
+            }
+            Ok(Err(_error)) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use notify::{event::CreateKind, Event, EventKind};
     use tempfile::tempdir;
 
-    use super::{FolderWatcherError, FolderWatcherProcessor};
+    use super::{FolderWatcher, FolderWatcherError, FolderWatcherProcessor};
     use crate::ProcessingState;
 
     fn create_event(path: PathBuf) -> Event {
@@ -196,5 +302,45 @@ mod tests {
             processor.process_event(&error_event),
             Err(FolderWatcherError::WatcherEvent(_))
         ));
+    }
+
+    #[test]
+    fn rejects_missing_and_non_directory_paths() {
+        let missing = PathBuf::from("C:\\does-not-exist\\screenshot-renamer");
+        assert!(matches!(
+            FolderWatcher::start(missing, |_| {}),
+            Err(FolderWatcherError::InvalidDirectory(_))
+        ));
+
+        let directory = tempdir().unwrap();
+        let file = directory.path().join("not-a-directory.png");
+        std::fs::write(&file, b"image").unwrap();
+        assert!(matches!(
+            FolderWatcher::start(file, |_| {}),
+            Err(FolderWatcherError::InvalidDirectory(_))
+        ));
+    }
+
+    #[test]
+    fn stops_idempotently_and_emits_a_new_supported_file_once() {
+        let directory = tempdir().unwrap();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let callback_received = Arc::clone(&received);
+        let mut watcher = FolderWatcher::start(directory.path().to_path_buf(), move |file| {
+            callback_received.lock().unwrap().push(file);
+        })
+        .unwrap();
+
+        let path = directory.path().join("Screenshot.png");
+        std::fs::write(&path, b"image").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && received.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        assert_eq!(received.lock().unwrap().len(), 1);
+        watcher.stop().unwrap();
+        watcher.stop().unwrap();
     }
 }
