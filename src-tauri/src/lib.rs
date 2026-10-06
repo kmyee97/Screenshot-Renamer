@@ -1,3 +1,4 @@
+pub mod folder_watcher;
 pub mod screenshot_file;
 
 pub use screenshot_file::{
