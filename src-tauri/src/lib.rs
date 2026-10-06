@@ -1,6 +1,8 @@
 pub mod screenshot_file;
 
-pub use screenshot_file::{ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError};
+pub use screenshot_file::{
+    is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
+};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
