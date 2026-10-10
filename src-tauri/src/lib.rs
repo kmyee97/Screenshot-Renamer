@@ -2,10 +2,12 @@ use std::{path::PathBuf, sync::Mutex};
 
 use tauri::{AppHandle, Emitter, State};
 
+pub mod filename_sanitizer;
 pub mod folder_watcher;
 pub mod rename_service;
 pub mod screenshot_file;
 
+pub use filename_sanitizer::{sanitize_stem, SanitizeError};
 pub use folder_watcher::{
     wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
     ReadinessError,
