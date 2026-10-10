@@ -30,7 +30,7 @@ pub use rename_service::{
 pub use screenshot_file::{
     is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
 };
-pub use undo_service::{undo_and_persist, undo_rename, UndoError};
+pub use undo_service::{undo_and_persist, undo_and_persist_suppressing, undo_rename, UndoError};
 
 #[derive(Default)]
 pub struct WatcherState(Mutex<Option<FolderWatcher>>);
@@ -180,22 +180,7 @@ async fn undo_history(
             .lock()
             .map_err(|_| "undo lock is unavailable".to_owned())?;
         let store = HistoryStore::open(&path).map_err(|error| error.to_string())?;
-        let entry = store
-            .get(&id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "rename history entry was not found".to_owned())?;
-        let original = entry.original_path().to_path_buf();
-        suppressed.suppress(&original);
-        let result = undo_and_persist(&id, &store);
-        let restored = match &result {
-            Ok(_) => true,
-            Err(UndoError::HistoryWrite { actual_path, .. }) => actual_path == &original,
-            Err(_) => false,
-        };
-        if !restored {
-            suppressed.clear(&original);
-        }
-        result.map_err(|error| error.to_string())
+        undo_and_persist_suppressing(&id, &store, &suppressed).map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| error.to_string())?

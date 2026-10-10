@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     rename_service::rename_without_replacement, HistoryRepository, HistoryStoreError,
-    RenameHistoryEntry, RenameHistoryView, RenameOutcome, UndoStatus,
+    RenameHistoryEntry, RenameHistoryView, RenameOutcome, SuppressedPaths, UndoStatus,
 };
 
 #[derive(Debug)]
@@ -89,10 +89,39 @@ where
         .ok_or(UndoError::NotUndoable)?
         .to_path_buf();
     if original == renamed {
-        entry
-            .mark_undo_succeeded(SystemTime::now())
-            .expect("successful rename is undoable");
-        return Ok(original);
+        return match fs::symlink_metadata(&renamed) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                entry
+                    .mark_undo_succeeded(SystemTime::now())
+                    .expect("successful rename is undoable");
+                Ok(original)
+            }
+            Ok(_) => {
+                let error = UndoError::RenamedSourceMissing { path: renamed };
+                entry
+                    .mark_undo_failed(SystemTime::now(), error.to_string())
+                    .expect("successful rename is undoable");
+                Err(error)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let error = UndoError::RenamedSourceMissing { path: renamed };
+                entry
+                    .mark_undo_failed(SystemTime::now(), error.to_string())
+                    .expect("successful rename is undoable");
+                Err(error)
+            }
+            Err(error) => {
+                let error = UndoError::Io {
+                    source_path: renamed.clone(),
+                    destination_path: original,
+                    source: error,
+                };
+                entry
+                    .mark_undo_failed(SystemTime::now(), error.to_string())
+                    .expect("successful rename is undoable");
+                Err(error)
+            }
+        };
     }
 
     let result = match fs::symlink_metadata(&renamed) {
@@ -177,6 +206,35 @@ pub fn undo_and_persist<R: HistoryRepository>(
     }
     result?;
     Ok(entry.view())
+}
+
+/// Suppress the watcher only when undo moves a file to the original path.
+pub fn undo_and_persist_suppressing<R: HistoryRepository>(
+    id: &str,
+    repository: &R,
+    suppressed: &SuppressedPaths,
+) -> Result<RenameHistoryView, UndoError> {
+    let entry = repository
+        .get(id)
+        .map_err(UndoError::HistoryRead)?
+        .ok_or(UndoError::UnknownHistoryEntry)?;
+    let original = entry.original_path().to_path_buf();
+    let moving = entry.new_path().is_some_and(|path| path != original);
+    if moving {
+        suppressed.suppress(&original);
+    }
+    let result = undo_and_persist(id, repository);
+    if moving {
+        let restored = match &result {
+            Ok(_) => true,
+            Err(UndoError::HistoryWrite { actual_path, .. }) => actual_path == &original,
+            Err(_) => false,
+        };
+        if !restored {
+            suppressed.clear(&original);
+        }
+    }
+    result
 }
 
 #[cfg(test)]

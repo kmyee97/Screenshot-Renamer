@@ -1,7 +1,9 @@
-use std::{fs, path::PathBuf, time::UNIX_EPOCH};
+use std::{fs, path::PathBuf, sync::Arc, time::UNIX_EPOCH};
 
+use notify::{event::CreateKind, Event, EventKind};
 use screenshot_renamer_lib::{
-    undo_and_persist, undo_rename, HistoryStore, RenameHistoryEntry, UndoError, UndoStatus,
+    undo_and_persist, undo_and_persist_suppressing, undo_rename, FolderWatcherProcessor,
+    HistoryStore, RenameHistoryEntry, SuppressedPaths, UndoError, UndoStatus,
 };
 
 fn renamed_entry(original: PathBuf, renamed: PathBuf) -> RenameHistoryEntry {
@@ -68,6 +70,38 @@ fn no_op_rename_can_be_undone_without_moving_the_file() {
     assert_eq!(undo_rename(&mut entry).unwrap(), path);
     assert_eq!(fs::read(path).unwrap(), b"image");
     assert!(matches!(entry.undo_status(), UndoStatus::Succeeded { .. }));
+}
+
+#[test]
+fn missing_no_op_source_is_not_marked_undone() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Screenshot.png");
+    let mut entry = renamed_entry(path.clone(), path);
+    assert!(matches!(
+        undo_rename(&mut entry),
+        Err(UndoError::RenamedSourceMissing { .. })
+    ));
+    assert!(matches!(entry.undo_status(), UndoStatus::Failed { .. }));
+}
+
+#[test]
+fn no_op_undo_does_not_suppress_the_next_real_create_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Screenshot.png");
+    fs::write(&path, b"image").unwrap();
+    let store = HistoryStore::open(&directory.path().join("history.sqlite")).unwrap();
+    let entry = renamed_entry(path.clone(), path.clone());
+    let id = entry.id().to_owned();
+    store.append(&entry).unwrap();
+    let suppressed = Arc::new(SuppressedPaths::default());
+    undo_and_persist_suppressing(&id, &store, &suppressed).unwrap();
+    let mut processor = FolderWatcherProcessor::with_suppression(suppressed);
+    let event = Event {
+        kind: EventKind::Create(CreateKind::File),
+        paths: vec![path],
+        attrs: Default::default(),
+    };
+    assert_eq!(processor.process_event(&event).unwrap().len(), 1);
 }
 
 #[test]

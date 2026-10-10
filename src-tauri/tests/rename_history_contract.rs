@@ -96,3 +96,16 @@ fn rename_service_returns_a_complete_record_for_success_and_failure() {
     ));
     assert_eq!(failure.history.new_path(), None);
 }
+
+#[test]
+fn history_normalizes_relative_paths_before_they_are_persisted() {
+    let mut entry = RenameHistoryEntry::new(PathBuf::from("Screenshot.png"), UNIX_EPOCH).unwrap();
+    entry
+        .mark_rename_succeeded(PathBuf::from("project.png"))
+        .unwrap();
+    assert!(entry.original_path().is_absolute());
+    assert!(entry.new_path().unwrap().is_absolute());
+    let view = entry.view();
+    assert_eq!(view.original_name, "Screenshot.png");
+    assert_eq!(view.new_name.as_deref(), Some("project.png"));
+}

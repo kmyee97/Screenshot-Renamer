@@ -139,9 +139,7 @@ impl HistoryRepository for HistoryStore {
         }
         let connection = self.connection()?;
         let mut statement = connection
-            .prepare(
-                "SELECT payload FROM entries ORDER BY attempted_at_ms DESC, id DESC LIMIT 1000",
-            )
+            .prepare("SELECT payload FROM entries ORDER BY attempted_at_ms DESC, id DESC")
             .map_err(sql_error)?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
