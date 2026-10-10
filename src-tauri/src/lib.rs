@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 
 pub mod filename_sanitizer;
 pub mod folder_watcher;
+pub mod rename_history;
 pub mod rename_service;
 pub mod screenshot_file;
 
@@ -12,7 +13,12 @@ pub use folder_watcher::{
     wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
     ReadinessError,
 };
-pub use rename_service::{rename_screenshot, RenameError};
+pub use rename_history::{
+    HistoryError, RenameHistoryEntry, RenameHistoryView, RenameOutcome, UndoStatus,
+};
+pub use rename_service::{
+    rename_screenshot, rename_screenshot_recorded, RecordedRename, RenameError,
+};
 pub use screenshot_file::{
     is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
 };

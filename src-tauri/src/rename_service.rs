@@ -3,9 +3,50 @@ use std::{
     ffi::{OsStr, OsString},
     fmt, fs, io,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
-use crate::{filename_sanitizer::sanitize_stem, ProcessingStage, ProcessingState, ScreenshotFile};
+use crate::{
+    filename_sanitizer::sanitize_stem, ProcessingStage, ProcessingState, RenameHistoryEntry,
+    ScreenshotFile,
+};
+
+pub struct RecordedRename {
+    pub history: RenameHistoryEntry,
+    pub result: Result<PathBuf, RenameError>,
+}
+
+/// Runs the filesystem rename and returns its history record with the result.
+/// A caller can persist the record before presenting a success as undoable.
+pub fn rename_screenshot_recorded(
+    screenshot: &mut ScreenshotFile,
+    candidate_stem: &str,
+) -> RecordedRename {
+    let mut history =
+        RenameHistoryEntry::new(screenshot.original_path().to_path_buf(), SystemTime::now())
+            .expect("screenshot path and current time are valid for history");
+    let result = rename_screenshot(screenshot, candidate_stem);
+    match &result {
+        Ok(destination) => history
+            .mark_rename_succeeded(destination.clone())
+            .expect("valid destination"),
+        Err(error) => {
+            let destination = match error {
+                RenameError::Io {
+                    destination_path, ..
+                }
+                | RenameError::CollisionLimit { destination_path } => {
+                    Some(destination_path.clone())
+                }
+                _ => None,
+            };
+            history
+                .mark_rename_failed(destination, error.to_string())
+                .expect("valid failure destination");
+        }
+    }
+    RecordedRename { history, result }
+}
 
 /// Renames a screenshot to a sanitized filename stem in the same directory.
 ///
