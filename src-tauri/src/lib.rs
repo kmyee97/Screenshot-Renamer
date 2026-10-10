@@ -3,12 +3,14 @@ use std::{path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, Emitter, State};
 
 pub mod folder_watcher;
+pub mod rename_service;
 pub mod screenshot_file;
 
 pub use folder_watcher::{
     wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
     ReadinessError,
 };
+pub use rename_service::{rename_screenshot, RenameError};
 pub use screenshot_file::{
     is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
 };
