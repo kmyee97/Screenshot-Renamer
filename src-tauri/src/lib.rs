@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -9,11 +12,12 @@ pub mod history_store;
 pub mod rename_history;
 pub mod rename_service;
 pub mod screenshot_file;
+pub mod undo_service;
 
 pub use filename_sanitizer::{sanitize_stem, SanitizeError};
 pub use folder_watcher::{
     wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
-    ReadinessError,
+    ReadinessError, SuppressedPaths,
 };
 pub use history_pipeline::{rename_screenshot_and_persist, PersistedRenameError};
 pub use history_store::{HistoryRepository, HistoryStore, HistoryStoreError};
@@ -26,14 +30,24 @@ pub use rename_service::{
 pub use screenshot_file::{
     is_supported_image_file, ProcessingStage, ProcessingState, ScreenshotFile, ScreenshotFileError,
 };
+pub use undo_service::{undo_and_persist, undo_and_persist_suppressing, undo_rename, UndoError};
 
 #[derive(Default)]
 pub struct WatcherState(Mutex<Option<FolderWatcher>>);
+
+pub struct SuppressionState(Arc<SuppressedPaths>);
+
+impl Default for SuppressionState {
+    fn default() -> Self {
+        Self(Arc::new(SuppressedPaths::default()))
+    }
+}
 
 pub struct HistoryState {
     database_path: Result<PathBuf, String>,
     /// Snapshot loaded during app startup for future UI integration.
     startup_recent: Vec<RenameHistoryView>,
+    undo_gate: Arc<Mutex<()>>,
 }
 
 impl HistoryState {
@@ -55,6 +69,7 @@ impl HistoryState {
         Self {
             database_path,
             startup_recent,
+            undo_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -73,12 +88,17 @@ fn greet(name: &str) -> String {
 fn start_watching(
     app: AppHandle,
     state: State<'_, WatcherState>,
+    suppression: State<'_, SuppressionState>,
     directory: String,
 ) -> Result<(), String> {
-    let watcher = FolderWatcher::start(PathBuf::from(directory), move |file| {
-        let path = file.original_path().to_string_lossy().into_owned();
-        let _ = app.emit("screenshot-detected", path);
-    })
+    let watcher = FolderWatcher::start_with_suppression(
+        PathBuf::from(directory),
+        move |file| {
+            let path = file.original_path().to_string_lossy().into_owned();
+            let _ = app.emit("screenshot-detected", path);
+        },
+        Arc::clone(&suppression.0),
+    )
     .map_err(|error| error.to_string())?;
 
     let mut active_watcher = state
@@ -146,6 +166,26 @@ async fn rename_and_record(
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn undo_history(
+    state: State<'_, HistoryState>,
+    suppression: State<'_, SuppressionState>,
+    id: String,
+) -> Result<RenameHistoryView, String> {
+    let path = state.path()?;
+    let gate = Arc::clone(&state.undo_gate);
+    let suppressed = Arc::clone(&suppression.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate
+            .lock()
+            .map_err(|_| "undo lock is unavailable".to_owned())?;
+        let store = HistoryStore::open(&path).map_err(|error| error.to_string())?;
+        undo_and_persist_suppressing(&id, &store, &suppressed).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -178,6 +218,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(WatcherState::default())
+        .manage(SuppressionState::default())
         .setup(|app| {
             let state = HistoryState::from_app(&app.handle());
             app.manage(state);
@@ -189,7 +230,8 @@ pub fn run() {
             stop_watching,
             startup_history,
             list_recent_history,
-            rename_and_record
+            rename_and_record,
+            undo_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

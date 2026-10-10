@@ -49,6 +49,7 @@ pub struct RenameHistoryView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HistoryError {
     MissingFilename,
+    PathResolution(String),
     TimeBeforeEpoch,
     InvalidTransition(&'static str),
 }
@@ -57,6 +58,9 @@ impl fmt::Display for HistoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingFilename => write!(f, "history path has no filename"),
+            Self::PathResolution(reason) => {
+                write!(f, "history path cannot be made absolute: {reason}")
+            }
             Self::TimeBeforeEpoch => write!(f, "history timestamp is before the Unix epoch"),
             Self::InvalidTransition(reason) => write!(f, "invalid history transition: {reason}"),
         }
@@ -68,6 +72,7 @@ impl std::error::Error for HistoryError {}
 impl RenameHistoryEntry {
     pub fn new(original_path: PathBuf, attempted_at: SystemTime) -> Result<Self, HistoryError> {
         filename(&original_path)?;
+        let original_path = absolute_path(original_path)?;
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             original_path,
@@ -100,7 +105,7 @@ impl RenameHistoryEntry {
     pub fn mark_rename_succeeded(&mut self, destination: PathBuf) -> Result<(), HistoryError> {
         self.require_pending()?;
         filename(&destination)?;
-        self.new_path = Some(destination);
+        self.new_path = Some(absolute_path(destination)?);
         self.outcome = RenameOutcome::Succeeded;
         Ok(())
     }
@@ -111,10 +116,12 @@ impl RenameHistoryEntry {
         message: String,
     ) -> Result<(), HistoryError> {
         self.require_pending()?;
-        if let Some(path) = &destination {
-            filename(path)?;
-        }
-        self.new_path = destination;
+        self.new_path = destination
+            .map(|path| {
+                filename(&path)?;
+                absolute_path(path)
+            })
+            .transpose()?;
         self.outcome = RenameOutcome::Failed { message };
         Ok(())
     }
@@ -183,6 +190,10 @@ impl RenameHistoryEntry {
 
 fn filename(path: &Path) -> Result<&std::ffi::OsStr, HistoryError> {
     path.file_name().ok_or(HistoryError::MissingFilename)
+}
+
+fn absolute_path(path: PathBuf) -> Result<PathBuf, HistoryError> {
+    std::path::absolute(path).map_err(|error| HistoryError::PathResolution(error.to_string()))
 }
 
 fn epoch_ms(at: SystemTime) -> Result<i64, HistoryError> {

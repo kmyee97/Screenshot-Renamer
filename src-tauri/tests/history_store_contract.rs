@@ -49,8 +49,8 @@ fn recent_entries_are_newest_first_and_bounded() {
     }
     let recent = store.list_recent(2).unwrap();
     assert_eq!(recent.len(), 2);
-    assert_eq!(recent[0].original_path(), PathBuf::from("new.png"));
-    assert_eq!(recent[1].original_path(), PathBuf::from("middle.png"));
+    assert!(recent[0].original_path().ends_with("new.png"));
+    assert!(recent[1].original_path().ends_with("middle.png"));
 }
 
 #[test]
@@ -73,13 +73,17 @@ fn malformed_rows_do_not_block_recent_history() {
     let store = HistoryStore::open(&path).unwrap();
     store.append(&successful_entry("valid", 1)).unwrap();
     drop(store);
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    connection
-        .execute(
-            "INSERT INTO entries (id, attempted_at_ms, payload) VALUES ('broken', 2, 'not json')",
-            [],
-        )
-        .unwrap();
+    let mut connection = rusqlite::Connection::open(&path).unwrap();
+    let transaction = connection.transaction().unwrap();
+    for index in 0..1001 {
+        transaction
+            .execute(
+                "INSERT INTO entries (id, attempted_at_ms, payload) VALUES (?1, ?2, 'not json')",
+                rusqlite::params![format!("broken-{index}"), index + 2],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
     drop(connection);
     let reopened = HistoryStore::open(&path).unwrap();
     let recent = reopened.list_recent(10).unwrap();

@@ -1,10 +1,11 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt,
     fs::OpenOptions,
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -15,6 +16,46 @@ use crate::{is_supported_image_file, ScreenshotFile};
 
 const READINESS_TIMEOUT: Duration = Duration::from_secs(2);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const UNDO_SUPPRESSION_WINDOW: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+pub struct SuppressedPaths(Mutex<HashMap<PathBuf, Instant>>);
+
+impl SuppressedPaths {
+    pub fn suppress(&self, path: &Path) {
+        if let Ok(mut paths) = self.0.lock() {
+            paths.insert(
+                normalize_path(path),
+                Instant::now() + UNDO_SUPPRESSION_WINDOW,
+            );
+        }
+    }
+
+    pub fn clear(&self, path: &Path) {
+        if let Ok(mut paths) = self.0.lock() {
+            paths.remove(&normalize_path(path));
+        }
+    }
+
+    fn consume(&self, path: &Path) -> bool {
+        let Ok(mut paths) = self.0.lock() else {
+            return false;
+        };
+        let now = Instant::now();
+        paths.retain(|_, expires| *expires > now);
+        paths.remove(&normalize_path(path)).is_some()
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    match (
+        path.parent().and_then(|parent| parent.canonicalize().ok()),
+        path.file_name(),
+    ) {
+        (Some(parent), Some(name)) => parent.join(name),
+        _ => path.to_path_buf(),
+    }
+}
 
 #[derive(Debug)]
 pub enum ReadinessError {
@@ -109,12 +150,18 @@ impl std::error::Error for FolderWatcherError {}
 
 pub struct FolderWatcherProcessor {
     emitted_paths: HashSet<PathBuf>,
+    suppressed_paths: Arc<SuppressedPaths>,
 }
 
 impl FolderWatcherProcessor {
     pub fn new() -> Self {
+        Self::with_suppression(Arc::new(SuppressedPaths::default()))
+    }
+
+    pub fn with_suppression(suppressed_paths: Arc<SuppressedPaths>) -> Self {
         Self {
             emitted_paths: HashSet::new(),
+            suppressed_paths,
         }
     }
 
@@ -141,6 +188,9 @@ impl FolderWatcherProcessor {
             let Ok(canonical_path) = path.canonicalize() else {
                 continue;
             };
+            if self.suppressed_paths.consume(&canonical_path) {
+                continue;
+            }
             if !self.emitted_paths.insert(canonical_path.clone()) {
                 continue;
             }
@@ -178,6 +228,17 @@ impl FolderWatcher {
     where
         F: Fn(ScreenshotFile) + Send + Sync + 'static,
     {
+        Self::start_with_suppression(directory, on_file, Arc::new(SuppressedPaths::default()))
+    }
+
+    pub fn start_with_suppression<F>(
+        directory: PathBuf,
+        on_file: F,
+        suppressed_paths: Arc<SuppressedPaths>,
+    ) -> Result<Self, FolderWatcherError>
+    where
+        F: Fn(ScreenshotFile) + Send + Sync + 'static,
+    {
         if !directory.is_dir() {
             return Err(FolderWatcherError::InvalidDirectory(directory));
         }
@@ -193,7 +254,13 @@ impl FolderWatcher {
 
         let (stop_sender, stop_receiver) = mpsc::channel();
         let worker = thread::spawn(move || {
-            run_worker(watcher, event_receiver, stop_receiver, on_file);
+            run_worker(
+                watcher,
+                event_receiver,
+                stop_receiver,
+                on_file,
+                suppressed_paths,
+            );
         });
 
         Ok(Self {
@@ -222,10 +289,11 @@ fn run_worker<F>(
     event_receiver: Receiver<Result<Event, notify::Error>>,
     stop_receiver: Receiver<()>,
     on_file: F,
+    suppressed_paths: Arc<SuppressedPaths>,
 ) where
     F: Fn(ScreenshotFile),
 {
-    let mut processor = FolderWatcherProcessor::new();
+    let mut processor = FolderWatcherProcessor::with_suppression(suppressed_paths);
 
     loop {
         match stop_receiver.try_recv() {
@@ -263,7 +331,7 @@ mod tests {
 
     use super::{
         wait_for_file_readiness, FolderWatcher, FolderWatcherError, FolderWatcherProcessor,
-        ReadinessError,
+        ReadinessError, SuppressedPaths,
     };
     use crate::ProcessingState;
 
@@ -273,6 +341,36 @@ mod tests {
             paths: vec![path],
             attrs: Default::default(),
         }
+    }
+
+    #[test]
+    fn restored_path_is_suppressed_once_without_hiding_other_images() {
+        let directory = tempdir().unwrap();
+        let restored = directory.path().join("Screenshot.png");
+        let unrelated = directory.path().join("other.png");
+        std::fs::write(&restored, b"restored").unwrap();
+        std::fs::write(&unrelated, b"new").unwrap();
+        let suppressed = Arc::new(SuppressedPaths::default());
+        suppressed.suppress(&restored);
+        let mut processor = FolderWatcherProcessor::with_suppression(suppressed);
+        assert!(processor
+            .process_event(&create_event(restored.clone()))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            processor
+                .process_event(&create_event(unrelated))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            processor
+                .process_event(&create_event(restored))
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
