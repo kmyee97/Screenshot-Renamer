@@ -11,18 +11,31 @@ use crate::{filename_sanitizer::sanitize_stem, ProcessingStage, ProcessingState,
 ///
 /// The source extension is retained. If the requested name already exists,
 /// numbered suffixes such as `name (2).png` are tried until an unused path is
-/// found. Failures are returned to the caller and recorded on the screenshot
-/// so a watcher can report the problem and continue processing other files.
+/// found. A case-only destination that resolves to the source is treated as
+/// already renamed. Failures are returned to the caller and recorded on the
+/// screenshot so a watcher can report the problem and continue processing.
 pub fn rename_screenshot(
     screenshot: &mut ScreenshotFile,
     candidate_stem: &str,
 ) -> Result<PathBuf, RenameError> {
+    rename_screenshot_with(screenshot, candidate_stem, rename_without_replacement)
+}
+
+fn rename_screenshot_with<F>(
+    screenshot: &mut ScreenshotFile,
+    candidate_stem: &str,
+    mut move_file: F,
+) -> Result<PathBuf, RenameError>
+where
+    F: FnMut(&Path, &Path) -> io::Result<()>,
+{
     screenshot.transition_to(ProcessingState::Renaming);
 
     let result = rename_file(
         screenshot.original_path(),
         screenshot.extension(),
         candidate_stem,
+        &mut move_file,
     );
     match &result {
         Ok(_) => screenshot.transition_to(ProcessingState::Renamed),
@@ -95,11 +108,15 @@ impl Error for RenameError {
     }
 }
 
-fn rename_file(
+fn rename_file<F>(
     source: &Path,
     extension: Option<&OsStr>,
     candidate_stem: &str,
-) -> Result<PathBuf, RenameError> {
+    move_file: &mut F,
+) -> Result<PathBuf, RenameError>
+where
+    F: FnMut(&Path, &Path) -> io::Result<()>,
+{
     let stem =
         sanitize_stem(candidate_stem).map_err(|error| RenameError::InvalidCandidateName {
             candidate: candidate_stem.to_owned(),
@@ -133,7 +150,7 @@ fn rename_file(
             continue;
         }
 
-        match rename_without_replacement(source, &destination) {
+        match move_file(source, &destination) {
             Ok(()) => return Ok(destination),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 suffix = Some(next_collision_suffix(suffix, &destination)?);
@@ -191,7 +208,7 @@ unsafe extern "system" {
 }
 
 #[cfg(windows)]
-fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     let source_wide = source
@@ -204,7 +221,7 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<(
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    // MoveFileW is a same-volume atomic move and fails if the destination exists.
+    // MoveFileW refuses an existing destination; same-folder moves stay on one volume.
     let succeeded = unsafe { MoveFileW(source_wide.as_ptr(), destination_wide.as_ptr()) };
 
     if succeeded != 0 {
@@ -264,7 +281,7 @@ fn copy_without_replacement(source: &Path, destination: &Path) -> io::Result<()>
 }
 
 #[cfg(not(windows))]
-fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
     rename_through_hard_link_or_copy(source, destination, fs::hard_link)
 }
 
@@ -312,7 +329,10 @@ mod tests {
 
     use crate::{ProcessingStage, ProcessingState, ScreenshotFile};
 
-    use super::{rename_screenshot, rename_through_hard_link_or_copy, RenameError};
+    use super::{
+        rename_screenshot, rename_screenshot_with, rename_through_hard_link_or_copy,
+        rename_without_replacement, RenameError,
+    };
 
     fn screenshot(path: PathBuf) -> ScreenshotFile {
         ScreenshotFile::new(path, None).expect("create screenshot model")
@@ -381,6 +401,78 @@ mod tests {
         assert_eq!(fs::read(existing).unwrap(), b"existing file");
         assert_eq!(fs::read(final_path).unwrap(), b"new screenshot");
         assert!(!source.exists());
+    }
+
+    #[test]
+    fn uses_unsuffixed_name_when_available_and_marks_renamed() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Screenshot.jpg");
+        fs::write(&source, b"new screenshot").unwrap();
+        let mut screenshot = screenshot(source.clone());
+
+        let final_path = rename_screenshot(&mut screenshot, "report").unwrap();
+
+        assert_eq!(final_path, directory.path().join("report.jpg"));
+        assert_eq!(fs::read(&final_path).unwrap(), b"new screenshot");
+        assert!(!source.exists());
+        assert_eq!(screenshot.state(), &ProcessingState::Renamed);
+    }
+
+    #[test]
+    fn retries_after_destination_appears_between_selection_and_move() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Screenshot.png");
+        fs::write(&source, b"new screenshot").unwrap();
+        let mut screenshot = screenshot(source.clone());
+        let mut first_attempt = true;
+
+        let final_path = rename_screenshot_with(&mut screenshot, "report", |from, to| {
+            if first_attempt {
+                first_attempt = false;
+                fs::write(to, b"other process")?;
+            }
+            rename_without_replacement(from, to)
+        })
+        .unwrap();
+
+        assert_eq!(final_path, directory.path().join("report (2).png"));
+        assert_eq!(
+            fs::read(directory.path().join("report.png")).unwrap(),
+            b"other process"
+        );
+        assert_eq!(fs::read(&final_path).unwrap(), b"new screenshot");
+        assert!(!source.exists());
+        assert_eq!(screenshot.state(), &ProcessingState::Renamed);
+    }
+
+    #[test]
+    fn unrelated_move_error_does_not_advance_to_another_suffix() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Screenshot.png");
+        fs::write(&source, b"new screenshot").unwrap();
+        let mut screenshot = screenshot(source.clone());
+        let mut attempts = 0;
+
+        let error = rename_screenshot_with(&mut screenshot, "report", |_, _| {
+            attempts += 1;
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "access denied",
+            ))
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, RenameError::Io { .. }));
+        assert_eq!(attempts, 1);
+        assert_eq!(fs::read(source).unwrap(), b"new screenshot");
+        assert!(!directory.path().join("report (2).png").exists());
+        assert!(matches!(
+            screenshot.state(),
+            ProcessingState::Failed {
+                stage: ProcessingStage::Rename,
+                ..
+            }
+        ));
     }
 
     #[cfg(windows)]
