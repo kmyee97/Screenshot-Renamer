@@ -115,6 +115,9 @@ fn rename_file(source: &Path, candidate_stem: &str) -> Result<PathBuf, RenameErr
             return Ok(source.to_path_buf());
         }
         if fs::symlink_metadata(&destination).is_ok() {
+            if paths_resolve_to_same_file(source, &destination) {
+                return Ok(source.to_path_buf());
+            }
             suffix = Some(next_collision_suffix(suffix, &destination)?);
             continue;
         }
@@ -132,6 +135,18 @@ fn rename_file(source: &Path, candidate_stem: &str) -> Result<PathBuf, RenameErr
                 })
             }
         }
+    }
+}
+
+fn paths_resolve_to_same_file(source: &Path, destination: &Path) -> bool {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        _ => return false,
+    }
+
+    match (fs::canonicalize(source), fs::canonicalize(destination)) {
+        (Ok(source), Ok(destination)) => source == destination,
+        _ => false,
     }
 }
 
@@ -187,12 +202,17 @@ fn is_reserved_windows_name(stem: &str) -> bool {
         .trim_end_matches(|character| character == ' ' || character == '.');
     let uppercase = first_part.to_ascii_uppercase();
 
-    matches!(uppercase.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ["COM", "LPT"].iter().any(|prefix| {
-            uppercase.strip_prefix(prefix).is_some_and(|digit| {
-                matches!(digit, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-            })
+    matches!(
+        uppercase.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|prefix| {
+        uppercase.strip_prefix(prefix).is_some_and(|digit| {
+            matches!(
+                digit,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
         })
+    })
 }
 
 fn destination_name(stem: &str, suffix: Option<u32>, extension: Option<&OsStr>) -> OsString {
@@ -254,12 +274,6 @@ fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<(
     }
 }
 
-#[cfg(not(windows))]
-fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
-    rename_through_hard_link(source, destination)
-}
-
-#[cfg(windows)]
 fn copy_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
     use std::io::Write;
 
@@ -293,33 +307,55 @@ fn copy_without_replacement(source: &Path, destination: &Path) -> io::Result<()>
 }
 
 #[cfg(not(windows))]
-fn rename_through_hard_link(source: &Path, destination: &Path) -> io::Result<()> {
-    // A hard link claims the destination atomically without replacing an existing file.
-    // The source and destination share a directory, so they are on the same filesystem.
-    fs::hard_link(source, destination)?;
-    if let Err(error) = fs::remove_file(source) {
-        if let Err(cleanup_error) = fs::remove_file(destination) {
-            return Err(io::Error::new(
-                error.kind(),
-                format!(
-                    "could not remove the original source ({error}) or roll back the destination link ({cleanup_error})"
-                ),
-            ));
+fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
+    rename_through_hard_link_or_copy(source, destination, fs::hard_link)
+}
+
+#[cfg(any(not(windows), test))]
+fn rename_through_hard_link_or_copy<F>(
+    source: &Path,
+    destination: &Path,
+    try_hard_link: F,
+) -> io::Result<()>
+where
+    F: FnOnce(&Path, &Path) -> io::Result<()>,
+{
+    match try_hard_link(source, destination) {
+        Ok(()) => {
+            if let Err(error) = fs::remove_file(source) {
+                if let Err(cleanup_error) = fs::remove_file(destination) {
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!(
+                            "could not remove the original source ({error}) or roll back the destination link ({cleanup_error})"
+                        ),
+                    ));
+                }
+                return Err(error);
+            }
+            Ok(())
         }
-        return Err(error);
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(link_error) => copy_without_replacement(source, destination).map_err(|copy_error| {
+            io::Error::new(
+                copy_error.kind(),
+                format!(
+                    "hard-link rename failed ({link_error}); safe copy fallback failed ({copy_error})"
+                ),
+            )
+        }),
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, io, path::PathBuf};
 
     use tempfile::tempdir;
 
     use crate::{ProcessingStage, ProcessingState, ScreenshotFile};
 
-    use super::{rename_screenshot, RenameError};
+    use super::{rename_screenshot, rename_through_hard_link_or_copy, RenameError};
 
     fn screenshot(path: PathBuf) -> ScreenshotFile {
         ScreenshotFile::new(path, None).expect("create screenshot model")
@@ -403,6 +439,69 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rejects_reserved_com_and_lpt_superscript_variants() {
+        for candidate in ["COM¹", "LPT³"] {
+            let directory = tempdir().expect("create temporary directory");
+            let source = directory.path().join("Screenshot.png");
+            fs::write(&source, b"screenshot").expect("create screenshot fixture");
+            let mut screenshot = screenshot(source.clone());
+
+            let error = rename_screenshot(&mut screenshot, candidate).unwrap_err();
+
+            assert!(matches!(error, RenameError::InvalidCandidateName { .. }));
+            assert!(source.exists());
+        }
+    }
+
+    #[test]
+    fn rejects_console_stream_device_names() {
+        for candidate in ["CONIN$", "CONOUT$"] {
+            let directory = tempdir().expect("create temporary directory");
+            let source = directory.path().join("Screenshot.png");
+            fs::write(&source, b"screenshot").expect("create screenshot fixture");
+            let mut screenshot = screenshot(source.clone());
+
+            let error = rename_screenshot(&mut screenshot, candidate).unwrap_err();
+
+            assert!(matches!(error, RenameError::InvalidCandidateName { .. }));
+            assert!(source.exists());
+        }
+    }
+
+    #[test]
+    fn copies_without_replacing_when_hard_links_are_unavailable() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Screenshot.png");
+        let destination = directory.path().join("report.png");
+        fs::write(&source, b"screenshot bytes").expect("create screenshot fixture");
+
+        rename_through_hard_link_or_copy(&source, &destination, |_, _| {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "hard links are unavailable",
+            ))
+        })
+        .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read(destination).unwrap(), b"screenshot bytes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn case_only_rename_does_not_allocate_a_collision_suffix() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Report.png");
+        fs::write(&source, b"screenshot").expect("create screenshot fixture");
+        let mut screenshot = screenshot(source.clone());
+
+        let final_path = rename_screenshot(&mut screenshot, "report").unwrap();
+
+        assert_eq!(final_path, source);
+        assert!(!directory.path().join("report (2).png").exists());
     }
 
     #[test]
