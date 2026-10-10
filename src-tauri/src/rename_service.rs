@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{ProcessingStage, ProcessingState, ScreenshotFile};
+use crate::{filename_sanitizer::sanitize_stem, ProcessingStage, ProcessingState, ScreenshotFile};
 
 /// Renames a screenshot to a sanitized filename stem in the same directory.
 ///
@@ -19,7 +19,11 @@ pub fn rename_screenshot(
 ) -> Result<PathBuf, RenameError> {
     screenshot.transition_to(ProcessingState::Renaming);
 
-    let result = rename_file(screenshot.original_path(), candidate_stem);
+    let result = rename_file(
+        screenshot.original_path(),
+        screenshot.extension(),
+        candidate_stem,
+    );
     match &result {
         Ok(_) => screenshot.transition_to(ProcessingState::Renamed),
         Err(error) => screenshot.transition_to(ProcessingState::Failed {
@@ -91,8 +95,16 @@ impl Error for RenameError {
     }
 }
 
-fn rename_file(source: &Path, candidate_stem: &str) -> Result<PathBuf, RenameError> {
-    let stem = sanitize_candidate_stem(candidate_stem)?;
+fn rename_file(
+    source: &Path,
+    extension: Option<&OsStr>,
+    candidate_stem: &str,
+) -> Result<PathBuf, RenameError> {
+    let stem =
+        sanitize_stem(candidate_stem).map_err(|error| RenameError::InvalidCandidateName {
+            candidate: candidate_stem.to_owned(),
+            reason: error.reason(),
+        })?;
     let metadata = fs::symlink_metadata(source).map_err(|error| RenameError::SourceNotFile {
         path: source.to_path_buf(),
         reason: error.to_string(),
@@ -105,7 +117,6 @@ fn rename_file(source: &Path, candidate_stem: &str) -> Result<PathBuf, RenameErr
     }
 
     let parent = source.parent().unwrap_or_else(|| Path::new(""));
-    let extension = source.extension();
     let mut suffix = None;
 
     loop {
@@ -159,60 +170,6 @@ fn next_collision_suffix(current: Option<u32>, destination: &Path) -> Result<u32
             }),
         None => Ok(2),
     }
-}
-
-fn sanitize_candidate_stem(candidate: &str) -> Result<String, RenameError> {
-    let mut sanitized = candidate
-        .trim()
-        .chars()
-        .map(|character| {
-            if character.is_control() || "<>:\"/\\|?*".contains(character) {
-                '-'
-            } else {
-                character
-            }
-        })
-        .collect::<String>();
-    sanitized = sanitized
-        .trim_end_matches(|character| character == ' ' || character == '.')
-        .to_owned();
-
-    if sanitized.is_empty() {
-        return Err(RenameError::InvalidCandidateName {
-            candidate: candidate.to_owned(),
-            reason: "the name is empty after removing unsupported characters",
-        });
-    }
-
-    if is_reserved_windows_name(&sanitized) {
-        return Err(RenameError::InvalidCandidateName {
-            candidate: candidate.to_owned(),
-            reason: "the name is a reserved Windows device name",
-        });
-    }
-
-    Ok(sanitized)
-}
-
-fn is_reserved_windows_name(stem: &str) -> bool {
-    let first_part = stem
-        .split('.')
-        .next()
-        .unwrap_or(stem)
-        .trim_end_matches(|character| character == ' ' || character == '.');
-    let uppercase = first_part.to_ascii_uppercase();
-
-    matches!(
-        uppercase.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ["COM", "LPT"].iter().any(|prefix| {
-        uppercase.strip_prefix(prefix).is_some_and(|digit| {
-            matches!(
-                digit,
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
-            )
-        })
-    })
 }
 
 fn destination_name(stem: &str, suffix: Option<u32>, extension: Option<&OsStr>) -> OsString {
@@ -374,6 +331,39 @@ mod tests {
         assert!(!source.exists());
         assert_eq!(fs::read(final_path).unwrap(), b"screenshot bytes");
         assert_eq!(screenshot.state(), &ProcessingState::Renamed);
+    }
+
+    #[test]
+    fn preserves_jpg_extension_when_candidate_contains_dots() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Screenshot.jpg");
+        fs::write(&source, b"screenshot bytes").expect("create screenshot fixture");
+        let mut screenshot = screenshot(source.clone());
+
+        let final_path = rename_screenshot(&mut screenshot, "report.final").unwrap();
+
+        assert_eq!(final_path, directory.path().join("report.final.jpg"));
+        assert!(!source.exists());
+    }
+
+    #[test]
+    fn invalid_only_candidate_keeps_source_and_records_failure() {
+        let directory = tempdir().expect("create temporary directory");
+        let source = directory.path().join("Screenshot.png");
+        fs::write(&source, b"screenshot bytes").expect("create screenshot fixture");
+        let mut screenshot = screenshot(source.clone());
+
+        let error = rename_screenshot(&mut screenshot, "<>:?").unwrap_err();
+
+        assert!(matches!(error, RenameError::InvalidCandidateName { .. }));
+        assert_eq!(fs::read(source).unwrap(), b"screenshot bytes");
+        assert!(matches!(
+            screenshot.state(),
+            ProcessingState::Failed {
+                stage: ProcessingStage::Rename,
+                ..
+            }
+        ));
     }
 
     #[test]
