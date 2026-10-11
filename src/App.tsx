@@ -23,8 +23,12 @@ function App() {
   const watcherEvent = useRef<{ revision: number; value: WatcherEvent | null }>({ revision: 0, value: null });
   function commitResponse(value: SettingsSnapshot, revision: number) {
     const event = watcherEvent.current;
+    if (value.revision !== undefined) {
+      setSnapshot(current => current?.revision !== undefined && current.revision > value.revision! ? current : value);
+      return;
+    }
     setSnapshot(event.revision > revision && event.value ? {
-      ...value, watcherStatus: event.value.watcherStatus, watcherError: event.value.watcherError,
+      ...value, ...event.value,
     } : value);
   }
   async function toggleAutoRename() {
@@ -65,19 +69,33 @@ function App() {
   }
   useEffect(() => {
     let active = true;
+    const releases: UnlistenFn[] = [];
+    async function attach() {
+      for (const [name, callback] of [
+        ["open-settings", () => setSettingsOpen(true)],
+        ["desktop-error", (event: { payload: string }) => setSettingsError(event.payload)],
+      ] as const) {
+        const release = await listen(name, callback as (event: { payload: unknown }) => void);
+        if (!active) release(); else releases.push(release);
+      }
+    }
+    void attach().catch(() => { if (active) setSettingsError("Could not connect tray controls. Reopen the app to retry."); });
+    return () => { active = false; releases.forEach(release => release()); };
+  }, []);
+  useEffect(() => {
+    let active = true;
     let unlisten: UnlistenFn | undefined;
-    let latestEvent: WatcherEvent | null = null;
     async function initialize() {
       try {
         const release = await listen<WatcherEvent>("watcher-state-changed", event => {
+          if (event.payload.revision !== undefined && watcherEvent.current.value?.revision !== undefined && event.payload.revision < watcherEvent.current.value.revision) return;
           watcherEvent.current = { revision: watcherEvent.current.revision + 1, value: event.payload };
-          latestEvent = event.payload;
-          if (active) setSnapshot(current => current ? { ...current, ...event.payload } : current);
+          if (active) setSnapshot(current => current && !(current.revision !== undefined && event.payload.revision !== undefined && current.revision > event.payload.revision) ? { ...current, ...event.payload } : current);
         });
         if (!active) { release(); return; }
         unlisten = release;
         const value = await invoke<SettingsSnapshot>("get_settings");
-        if (active) setSnapshot({ ...value, ...(latestEvent ?? {}) });
+        if (active) commitResponse(value, 0);
       } catch (error) { if (active) setSettingsError(errorMessage(error)); }
     }
     void initialize();

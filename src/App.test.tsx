@@ -64,6 +64,23 @@ test("opens and closes settings without losing the main controls", () => {
   expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument();
 });
 
+test("tray Settings opens the settings panel and cleans up its listener", async () => {
+  const { listen } = await import("@tauri-apps/api/event");
+  const { act } = await import("@testing-library/react");
+  let handler: () => void = () => {};
+  const release = vi.fn();
+  vi.mocked(listen).mockImplementation(async (name, callback) => {
+    if (name === "open-settings") { handler = callback as unknown as () => void; return release; }
+    return () => {};
+  });
+  const { unmount } = render(<App />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Choose folder" })).toBeEnabled());
+  act(() => handler());
+  expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  unmount();
+  expect(release).toHaveBeenCalledOnce();
+});
+
 test("restores the saved folder and shows nonfatal settings warnings", async () => {
   vi.mocked(invoke).mockImplementation(async command => command === "list_analysis_failures" ? [] : command === "get_recent_history" ? { entries: [], undoLast: null } : { settings: { version: 1, watchedFolder: "C:/Screenshots", autoRename: false }, warning: "Recovered invalid settings." });
   render(<App />);
@@ -125,4 +142,27 @@ test("a delayed command response cannot erase a newer watcher failure", async ()
   await waitFor(() => expect(screen.getByRole("checkbox", { name: "Auto Rename" })).toBeEnabled());
   expect(screen.getByText("Error")).toBeInTheDocument();
   expect(screen.getByText("Folder disappeared.")).toBeInTheDocument();
+});
+
+test("a delayed command cannot replace newer tray settings", async () => {
+  const { listen } = await import("@tauri-apps/api/event");
+  const { act } = await import("@testing-library/react");
+  let handler: (event: { payload: unknown }) => void = () => {};
+  let release: (value: unknown) => void = () => {};
+  vi.mocked(listen).mockImplementation(async (name, callback) => { if (name === "watcher-state-changed") handler = callback as typeof handler; return () => {}; });
+  const initial = { settings: { version: 1, watchedFolder: "C:/Screenshots", autoRename: false }, watcherStatus: "Paused", watcherError: null, warning: null, revision: 1 };
+  vi.mocked(invoke).mockImplementation(async command => {
+    if (command === "list_analysis_failures") return [];
+    if (command === "get_recent_history") return { entries: [], undoLast: null };
+    if (command === "set_auto_rename") return new Promise(resolve => { release = resolve; });
+    return initial;
+  });
+  render(<App />);
+  await screen.findByText("C:/Screenshots");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Auto Rename" }));
+  act(() => handler({ payload: { ...initial, revision: 3 } }));
+  release({ ...initial, settings: { ...initial.settings, autoRename: true }, watcherStatus: "Watching", revision: 2 });
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "Auto Rename" })).toBeEnabled());
+  expect(screen.getByRole("checkbox", { name: "Auto Rename" })).not.toBeChecked();
+  expect(screen.getByText("Paused")).toBeInTheDocument();
 });
