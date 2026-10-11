@@ -10,6 +10,7 @@ import { PipelineNotice } from "./components/PipelineNotice";
 import { AnalysisFailures } from "./components/AnalysisFailures";
 import { NamingSettings } from "./components/NamingSettings";
 import { AiSettings } from "./components/AiSettings";
+import {StartupSettings} from "./components/StartupSettings";
 import type { AiPreferences } from "./types";
 import type { DesktopPreferences } from "./types";
 import "./App.css";
@@ -77,6 +78,16 @@ function App() {
     catch(error) { setSettingsError(errorMessage(error)); }
     finally { setSavingNaming(false); }
   }
+  async function saveStartup(enabled:boolean):Promise<boolean> {
+    if(!snapshot||choosing||toggling||savingNaming)throw "Wait for the current settings operation to finish.";
+    setSavingNaming(true);
+    const revision=watcherEvent.current.revision;
+    try{
+      const result=await invoke<{enabled:boolean;snapshot:SettingsSnapshot}>("set_startup_enabled",{enabled});
+      commitResponse(result.snapshot,revision);
+      return result.enabled;
+    }finally{setSavingNaming(false);}
+  }
   useEffect(() => {
     let active = true;
     const releases: UnlistenFn[] = [];
@@ -131,6 +142,7 @@ function App() {
         <p>Auto Rename preference: {snapshot?.settings.autoRename ? "On" : "Off"}</p>
         {snapshot ? <label className="toggle"><input type="checkbox" checked={snapshot.settings.desktop?.minimizeToTray ?? true} disabled={choosing || toggling || savingNaming} onChange={event=>void saveDesktop({ ...snapshot.settings.desktop, minimizeToTray:event.target.checked })} /> Minimize to tray</label> : null}
         <p className="muted">Closing the window keeps active monitoring in the tray. Use tray Quit to exit.</p>
+        {snapshot ? <StartupSettings disabled={choosing||toggling||savingNaming} onSave={saveStartup}/> : null}
         {snapshot ? <NamingSettings value={snapshot.settings.naming} disabled={choosing || toggling || savingNaming} onSave={saveNaming} /> : null}
         {snapshot ? <AiSettings value={snapshot.settings.ai} disabled={choosing || toggling || savingNaming} onSave={saveAnalysis} /> : null}
         <p className="muted">Preferences are saved on this device.</p>

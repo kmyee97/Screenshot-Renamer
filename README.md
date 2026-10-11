@@ -36,6 +36,8 @@ Windows OCR operations share a three-second deadline and cancel stalled work bef
 
 ## AI privacy preferences
 
+Start with Windows is opt-in. Settings reads the per-user OS registration rather than assuming a saved preference means registration succeeded. Failed saves roll back the registration; the UI rechecks its actual state. Login launches initialize preferences and monitoring before staying in the tray. Opening the app manually restores the existing instance, avoiding duplicate watchers or tray icons. Registration uses this executable with `--autostart` and requires no administrator rights.
+
 New installs and older settings default to Local. In Settings, selecting AI or Hybrid requires checking the explicit screenshot-upload consent box and saving the preference. Returning to Local disables cloud analysis. The provider and model choice persist in settings; API keys are stored separately in Windows Credential Manager under `ScreenshotRenamer/OpenAI`, never in settings JSON or rename history. The UI accepts a key only for entry, clears it immediately after submission, and can remove a saved key. Saving a key alone grants no upload consent. An unavailable credential store or missing key is a recoverable configuration error.
 
 The first vision adapter uses OpenAI Responses with configurable `gpt-4.1-mini` as the default. See [adapter limits, API costs, retention and test instructions](docs/openai-vision.md). Image uploads use a fixed HTTPS endpoint and Windows native TLS certificate validation.

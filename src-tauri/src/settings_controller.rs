@@ -93,6 +93,20 @@ impl<W: WatchSession> SettingsController<W> {
     pub fn set_warning(&mut self, message: String) {
         self.snapshot.warning = Some(message);
     }
+    pub fn save_desktop_preferences(
+        &mut self,
+        desktop: crate::desktop::DesktopPreferences,
+    ) -> Result<SettingsSnapshot, String> {
+        let mut settings = self.snapshot.settings.clone();
+        settings.desktop = desktop;
+        self.store
+            .as_ref()
+            .map_err(Clone::clone)?
+            .save_preference(&settings, true)?;
+        self.commit_naming(&settings);
+        self.snapshot.settings = settings;
+        Ok(self.snapshot())
+    }
     pub fn restore<F>(&mut self, start: F)
     where
         F: FnOnce(&str, Arc<AtomicBool>, Arc<Mutex<Option<String>>>) -> Result<W, String>,
@@ -126,6 +140,15 @@ impl<W: WatchSession> SettingsController<W> {
     where
         F: FnOnce(&str, Arc<AtomicBool>, Arc<Mutex<Option<String>>>) -> Result<W, String>,
     {
+        if settings.version == self.snapshot.settings.version
+            && settings.watched_folder == self.snapshot.settings.watched_folder
+            && settings.auto_rename == self.snapshot.settings.auto_rename
+            && settings.naming == self.snapshot.settings.naming
+            && settings.ai == self.snapshot.settings.ai
+            && settings.desktop != self.snapshot.settings.desktop
+        {
+            return self.save_desktop_preferences(settings.desktop);
+        }
         // Pausing an unavailable folder must remain possible; validate a folder only when enabling or replacing it.
         settings.ai.validate().map_err(|error| error.to_string())?;
         settings
