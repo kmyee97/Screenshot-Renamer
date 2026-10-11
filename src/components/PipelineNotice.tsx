@@ -5,7 +5,7 @@ export function PipelineNotice() {
   useEffect(() => {
     let active = true;
     const releases: UnlistenFn[] = [];
-    for (const [name, failed] of [["screenshot-analysis-warning", false], ["screenshot-naming-failed", true]] as const) {
+    for (const [name, failed] of [["screenshot-analysis-warning", false], ["screenshot-naming-failed", true], ["screenshot-analysis-completed", false]] as const) {
       void listen<string>(name, event => {
         if (active) setNotice({ message: event.payload, failed });
       }).then(release => { if (active) releases.push(release); else release(); }).catch(() => {});

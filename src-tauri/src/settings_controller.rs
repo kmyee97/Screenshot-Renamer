@@ -30,6 +30,7 @@ pub struct SettingsController<W: WatchSession> {
     snapshot: SettingsSnapshot,
     active: Option<Active<W>>,
     naming_rules: Arc<Mutex<crate::naming_engine::NamingRules>>,
+    processing_settings: Arc<Mutex<ApplicationSettings>>,
 }
 impl<W: WatchSession> SettingsController<W> {
     pub fn new(store: Result<SettingsStore, String>) -> Self {
@@ -38,6 +39,7 @@ impl<W: WatchSession> SettingsController<W> {
             Err(error) => SettingsSnapshot::new(Default::default(), Some(error.clone())),
         };
         Self {
+            processing_settings: Arc::new(Mutex::new(snapshot.settings.clone())),
             naming_rules: Arc::new(Mutex::new(snapshot.settings.naming.clone())),
             store,
             snapshot,
@@ -70,7 +72,14 @@ impl<W: WatchSession> SettingsController<W> {
     pub fn naming_rules(&self) -> Arc<Mutex<crate::naming_engine::NamingRules>> {
         self.naming_rules.clone()
     }
+    pub fn processing_settings(&self) -> Arc<Mutex<ApplicationSettings>> {
+        self.processing_settings.clone()
+    }
     fn commit_naming(&self, settings: &ApplicationSettings) {
+        *self
+            .processing_settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = settings.clone();
         *self.naming_rules.lock().unwrap_or_else(|e| e.into_inner()) = settings.naming.clone();
     }
     pub fn is_watching(&self) -> bool {
