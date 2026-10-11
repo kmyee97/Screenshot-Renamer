@@ -104,6 +104,10 @@ impl<W: WatchSession> SettingsController<W> {
         F: FnOnce(&str, Arc<AtomicBool>, Arc<Mutex<Option<String>>>) -> Result<W, String>,
     {
         // Pausing an unavailable folder must remain possible; validate a folder only when enabling or replacing it.
+        settings
+            .naming
+            .validate()
+            .map_err(|error| error.to_string())?;
         let pausing = !settings.auto_rename
             && settings.watched_folder == self.snapshot.settings.watched_folder;
         if pausing {

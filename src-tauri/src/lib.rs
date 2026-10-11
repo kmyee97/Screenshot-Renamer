@@ -11,6 +11,7 @@ pub mod history_pipeline;
 pub mod history_store;
 pub mod history_ui;
 pub mod naming_engine;
+pub mod naming_templates;
 pub mod ocr_service;
 pub mod ocr_text_cleaner;
 pub mod rename_history;
@@ -76,8 +77,16 @@ fn update_settings(
         .controller
         .lock()
         .map_err(|_| "Settings are unavailable.")?;
+    let rules = settings.naming.clone();
     let result = controller.apply(settings, |folder, enabled, error| {
-        prepare_watcher(&app, folder, enabled, error, Arc::clone(&suppression.0))
+        prepare_watcher(
+            &app,
+            folder,
+            enabled,
+            error,
+            Arc::clone(&suppression.0),
+            rules,
+        )
     });
     let _ = app.emit("watcher-state-changed", controller.snapshot());
     result
@@ -96,8 +105,16 @@ fn set_auto_rename(
         .map_err(|_| "Settings are unavailable.")?;
     let mut settings = controller.snapshot().settings;
     settings.auto_rename = enabled;
+    let rules = settings.naming.clone();
     let result = controller.apply(settings, |folder, enabled, error| {
-        prepare_watcher(&app, folder, enabled, error, Arc::clone(&suppression.0))
+        prepare_watcher(
+            &app,
+            folder,
+            enabled,
+            error,
+            Arc::clone(&suppression.0),
+            rules,
+        )
     });
     let _ = app.emit("watcher-state-changed", controller.snapshot());
     result
@@ -109,6 +126,7 @@ fn prepare_watcher(
     enabled: Arc<std::sync::atomic::AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     suppression: Arc<SuppressedPaths>,
+    rules: naming_engine::NamingRules,
 ) -> Result<FolderWatcher, String> {
     let file_app = app.clone();
     let error_app = app.clone();
@@ -128,6 +146,7 @@ fn prepare_watcher(
                     file,
                     &processing_enabled,
                     &retained_suppression,
+                    &rules,
                 );
             }
         },
@@ -152,6 +171,7 @@ fn process_automatic_screenshot(
     file: ScreenshotFile,
     enabled: &std::sync::atomic::AtomicBool,
     suppression: &SuppressedPaths,
+    rules: &naming_engine::NamingRules,
 ) {
     // This callback runs on the folder watcher's worker after file readiness.
     let mut metadata = screenshot_metadata::ScreenshotMetadata::from_file(&file);
@@ -170,7 +190,7 @@ fn process_automatic_screenshot(
     if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let candidate = match naming_engine::name(&metadata, &naming_engine::NamingRules::default()) {
+    let candidate = match naming_engine::name(&metadata, rules) {
         Ok(candidate) => candidate,
         Err(error) => {
             let _ = app.emit(
@@ -387,6 +407,11 @@ struct RenameRetryResult {
 }
 
 #[tauri::command]
+fn preview_naming(rules: naming_engine::NamingRules) -> Result<String, String> {
+    naming_templates::preview(&rules).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn retry_rename(
     app: AppHandle,
     state: State<'_, HistoryState>,
@@ -514,25 +539,30 @@ pub fn run() {
         .setup(|app| {
             app.manage(HistoryState::from_app(&app.handle()));
             let settings = SettingsState::from_app(&app.handle());
-            settings
-                .controller
-                .lock()
-                .map_err(|_| "Settings unavailable")?
-                .restore(|folder, enabled, error| {
+            {
+                let mut controller = settings
+                    .controller
+                    .lock()
+                    .map_err(|_| "Settings unavailable")?;
+                let rules = controller.snapshot().settings.naming;
+                controller.restore(|folder, enabled, error| {
                     prepare_watcher(
                         &app.handle(),
                         folder,
                         enabled,
                         error,
                         Arc::clone(&app.state::<SuppressionState>().0),
+                        rules,
                     )
                 });
+            }
             app.manage(settings);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             greet,
             get_settings,
+            preview_naming,
             update_settings,
             set_auto_rename,
             start_watching,

@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { errorMessage, type SettingsSnapshot, type WatcherEvent } from "./types";
+import { errorMessage, type SettingsSnapshot, type WatcherEvent, type NamingRules } from "./types";
 import { WatchedFolder } from "./components/WatchedFolder";
 import { WatcherControls } from "./components/WatcherControls";
 import { RecentRenames } from "./components/RecentRenames";
 import { PipelineNotice } from "./components/PipelineNotice";
+import { NamingSettings } from "./components/NamingSettings";
 import "./App.css";
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [savingNaming, setSavingNaming] = useState(false);
   const watcherEvent = useRef<{ revision: number; value: WatcherEvent | null }>({ revision: 0, value: null });
   function commitResponse(value: SettingsSnapshot, revision: number) {
     const event = watcherEvent.current;
@@ -23,7 +25,7 @@ function App() {
     } : value);
   }
   async function toggleAutoRename() {
-    if (!snapshot || choosing || toggling) return;
+    if (!snapshot || choosing || toggling || savingNaming) return;
     setToggling(true);
     setSettingsError(null);
     const revision = watcherEvent.current.revision;
@@ -32,7 +34,7 @@ function App() {
     finally { setToggling(false); }
   }
   async function chooseFolder() {
-    if (!snapshot || choosing || toggling) return;
+    if (!snapshot || choosing || toggling || savingNaming) return;
     setChoosing(true);
     setSettingsError(null);
     try {
@@ -43,6 +45,13 @@ function App() {
       }
     } catch (error) { setSettingsError(errorMessage(error)); }
     finally { setChoosing(false); }
+  }
+  async function saveNaming(rules: NamingRules) {
+    if (!snapshot || choosing || toggling || savingNaming) throw "Wait for the current settings operation to finish.";
+    setSavingNaming(true);
+    const revision = watcherEvent.current.revision;
+    try { commitResponse(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, naming: rules } }), revision); }
+    finally { setSavingNaming(false); }
   }
   useEffect(() => {
     let active = true;
@@ -72,14 +81,15 @@ function App() {
       </header>
       {settingsError ? <p role="alert" className="error">{settingsError}</p> : null}
       {snapshot?.warning ? <p role="status" className="muted">{snapshot.warning}</p> : null}
-      <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} onChoose={snapshot ? chooseFolder : undefined} pending={choosing || toggling} />
-      <WatcherControls snapshot={snapshot} pending={choosing || toggling} onToggle={toggleAutoRename} />
+      <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} onChoose={snapshot ? chooseFolder : undefined} pending={choosing || toggling || savingNaming} />
+      <WatcherControls snapshot={snapshot} pending={choosing || toggling || savingNaming} onToggle={toggleAutoRename} />
       <RecentRenames />
       <PipelineNotice />
       {settingsOpen ? <section className="panel" id="settings-panel" aria-labelledby="settings-heading">
         <div className="section-header"><h2 id="settings-heading">Settings</h2><button onClick={() => setSettingsOpen(false)}>Close settings</button></div>
         <p>Folder: {snapshot?.settings.watchedFolder ?? "Not configured"}</p>
         <p>Auto Rename preference: {snapshot?.settings.autoRename ? "On" : "Off"}</p>
+        {snapshot ? <NamingSettings value={snapshot.settings.naming} disabled={choosing || toggling || savingNaming} onSave={saveNaming} /> : null}
         <p className="muted">Preferences are saved on this device.</p>
       </section> : null}
     </main>
