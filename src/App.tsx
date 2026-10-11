@@ -6,6 +6,7 @@ import { errorMessage, type SettingsSnapshot, type WatcherEvent } from "./types"
 import { WatchedFolder } from "./components/WatchedFolder";
 import { WatcherControls } from "./components/WatcherControls";
 import { RecentRenames } from "./components/RecentRenames";
+import { PipelineNotice } from "./components/PipelineNotice";
 import "./App.css";
 
 function App() {
@@ -74,6 +75,7 @@ function App() {
       <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} onChoose={snapshot ? chooseFolder : undefined} pending={choosing || toggling} />
       <WatcherControls snapshot={snapshot} pending={choosing || toggling} onToggle={toggleAutoRename} />
       <RecentRenames />
+      <PipelineNotice />
       {settingsOpen ? <section className="panel" id="settings-panel" aria-labelledby="settings-heading">
         <div className="section-header"><h2 id="settings-heading">Settings</h2><button onClick={() => setSettingsOpen(false)}>Close settings</button></div>
         <p>Folder: {snapshot?.settings.watchedFolder ?? "Not configured"}</p>
