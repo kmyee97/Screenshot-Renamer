@@ -109,6 +109,33 @@ pub enum RenameError {
     },
 }
 
+impl RenameError {
+    pub fn destination_path(&self) -> Option<&Path> {
+        match self {
+            Self::Io {
+                destination_path, ..
+            }
+            | Self::CollisionLimit { destination_path } => Some(destination_path),
+            _ => None,
+        }
+    }
+
+    pub fn category(&self) -> crate::rename_recovery::RenameFailureCategory {
+        use crate::rename_recovery::RenameFailureCategory;
+        match self {
+            Self::InvalidCandidateName { .. } => RenameFailureCategory::InvalidName,
+            Self::CollisionLimit { .. } => RenameFailureCategory::CollisionExhausted,
+            Self::SourceNotFile { path, .. } if matches!(fs::symlink_metadata(path), Err(error) if error.kind() == io::ErrorKind::NotFound) => {
+                RenameFailureCategory::SourceMissing
+            }
+            Self::Io { source, .. } if source.kind() == io::ErrorKind::NotFound => {
+                RenameFailureCategory::SourceMissing
+            }
+            _ => RenameFailureCategory::PermissionIo,
+        }
+    }
+}
+
 impl fmt::Display for RenameError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -220,6 +247,11 @@ fn paths_resolve_to_same_file(source: &Path, destination: &Path) -> bool {
 }
 
 fn next_collision_suffix(current: Option<u32>, destination: &Path) -> Result<u32, RenameError> {
+    if current.is_some_and(|suffix| suffix >= 10_000) {
+        return Err(RenameError::CollisionLimit {
+            destination_path: destination.to_path_buf(),
+        });
+    }
     match current {
         Some(current) => current
             .checked_add(1)
@@ -374,6 +406,31 @@ mod tests {
         rename_screenshot, rename_screenshot_with, rename_through_hard_link_or_copy,
         rename_without_replacement, RenameError,
     };
+
+    #[test]
+    fn collision_exhaustion_is_bounded_and_keeps_the_screenshot() {
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("Screenshot.png");
+        fs::write(&source, b"image").unwrap();
+        let mut screenshot = screenshot(source.clone());
+        let mut attempts = 0;
+        let error = rename_screenshot_with(&mut screenshot, "project", |_, _| {
+            attempts += 1;
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, "occupied"))
+        })
+        .unwrap_err();
+        assert_eq!(attempts, 10_000);
+        assert_eq!(
+            error.category(),
+            crate::RenameFailureCategory::CollisionExhausted
+        );
+        assert_eq!(
+            error.destination_path(),
+            Some(directory.path().join("project (10000).png").as_path())
+        );
+        assert_eq!(fs::read(source).unwrap(), b"image");
+        assert!(matches!(screenshot.state(), ProcessingState::Failed { .. }));
+    }
 
     fn screenshot(path: PathBuf) -> ScreenshotFile {
         ScreenshotFile::new(path, None).expect("create screenshot model")
