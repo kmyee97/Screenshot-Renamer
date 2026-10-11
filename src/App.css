@@ -1,116 +1,26 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
+:root { font-family: "Segoe UI", system-ui, sans-serif; color: #17233b; background: #f2f5fa; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+button { padding: .55rem .9rem; border: 1px solid #b6c5dc; border-radius: .55rem; background: #fff; color: #17427c; cursor: pointer; }
+button:hover:not(:disabled) { background: #edf3fd; border-color: #496da8; }
+button:disabled { color: #6a7484; cursor: default; opacity: .65; }
+button:focus-visible, input:focus-visible { outline: 3px solid #4479cc; outline-offset: 3px; }
+.app-shell { max-width: 880px; margin: auto; padding: 28px; }
+.app-header, .section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.app-header { margin-bottom: 24px; }
+h1 { font-size: 1.7rem; margin: 4px 0 0; letter-spacing: -.035em; }
+h2 { font-size: 1rem; margin: 0; }
+p { line-height: 1.5; }
+.eyebrow { font-size: .65rem; letter-spacing: .14em; font-weight: 700; color: #557099; margin: 0; }
+.panel { padding: 18px 20px; border: 1px solid #dce3ef; border-radius: 12px; background: #fff; margin-bottom: 14px; }
+.folder-path { overflow-wrap: anywhere; margin-bottom: 0; }
+.status { font-size: .9rem; font-weight: 600; background: #edf1f7; padding: .35rem .7rem; border-radius: 20px; }
+.toggle { display: flex; gap: 8px; align-items: center; font-size: .9rem; }
+.toggle input { width: 18px; height: 18px; accent-color: #2359a4; }
+.muted { color: #59677e; font-size: .85rem; }
+.empty-state { padding: 24px 8px; text-align: center; }
+.empty-state p { margin: 6px 0; }
+.error { color: #a52132; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .app-shell { padding: 16px; } .app-header { align-items: flex-start; } h1 { font-size: 1.35rem; } .panel { padding: 16px; } .section-header { flex-wrap: wrap; } }
+@media (prefers-color-scheme: dark) { :root { color: #e7eefb; background: #141c2c; } .panel { background: #1e293d; border-color: #354561; } button { background: #26344b; color: #dfebff; border-color: #5a7192; } button:hover:not(:disabled) { background: #344967; } .status { background: #33415b; } .muted, .eyebrow { color: #b5c5de; } .error { color: #ffb2bc; } }
