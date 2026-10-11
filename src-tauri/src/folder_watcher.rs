@@ -5,7 +5,10 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -239,13 +242,43 @@ impl FolderWatcher {
     where
         F: Fn(ScreenshotFile) + Send + Sync + 'static,
     {
+        Self::start_controlled(
+            directory,
+            on_file,
+            suppressed_paths,
+            Arc::new(AtomicBool::new(true)),
+            |_| {},
+        )
+    }
+
+    pub fn start_controlled<F, E>(
+        directory: PathBuf,
+        on_file: F,
+        suppressed_paths: Arc<SuppressedPaths>,
+        enabled: Arc<AtomicBool>,
+        on_error: E,
+    ) -> Result<Self, FolderWatcherError>
+    where
+        F: Fn(ScreenshotFile) + Send + Sync + 'static,
+        E: Fn(String) + Send + Sync + 'static,
+    {
         if !directory.is_dir() {
             return Err(FolderWatcherError::InvalidDirectory(directory));
         }
 
         let (event_sender, event_receiver) = mpsc::sync_channel(64);
+        let receive_enabled = enabled.clone();
+        let on_error = Arc::new(on_error);
+        let receive_error = on_error.clone();
         let mut watcher = notify::recommended_watcher(move |event| {
-            let _ = event_sender.send(event);
+            if !receive_enabled.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Err(mpsc::TrySendError::Full(_)) = event_sender.try_send(event) {
+                receive_error(
+                    "Screenshot watcher queue is full. Pause and resume to retry.".into(),
+                );
+            }
         })
         .map_err(|error| FolderWatcherError::Watcher(error.to_string()))?;
         watcher
@@ -260,6 +293,9 @@ impl FolderWatcher {
                 stop_receiver,
                 on_file,
                 suppressed_paths,
+                enabled,
+                on_error,
+                directory,
             );
         });
 
@@ -290,6 +326,9 @@ fn run_worker<F>(
     stop_receiver: Receiver<()>,
     on_file: F,
     suppressed_paths: Arc<SuppressedPaths>,
+    enabled: Arc<AtomicBool>,
+    on_error: Arc<impl Fn(String)>,
+    directory: PathBuf,
 ) where
     F: Fn(ScreenshotFile),
 {
@@ -300,16 +339,34 @@ fn run_worker<F>(
             Ok(()) | Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
         }
+        if enabled.load(Ordering::SeqCst) && !directory.is_dir() {
+            on_error("The watched folder disappeared or is inaccessible.".into());
+            break;
+        }
 
         match event_receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(Ok(event)) => {
-                if let Ok(files) = processor.process_event(&event) {
-                    for file in files {
-                        on_file(file);
+                if !enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
+                match processor.process_event(&event) {
+                    Ok(files) => {
+                        for file in files {
+                            if enabled.load(Ordering::SeqCst) {
+                                on_file(file);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        on_error(error.to_string());
+                        break;
                     }
                 }
             }
-            Ok(Err(_error)) => {}
+            Ok(Err(error)) => {
+                on_error(error.to_string());
+                break;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }

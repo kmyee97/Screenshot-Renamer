@@ -24,3 +24,5 @@ p { line-height: 1.5; }
 .error { color: #a52132; overflow-wrap: anywhere; }
 @media (max-width: 480px) { .app-shell { padding: 16px; } .app-header { align-items: flex-start; } h1 { font-size: 1.35rem; } .panel { padding: 16px; } .section-header { flex-wrap: wrap; } }
 @media (prefers-color-scheme: dark) { :root { color: #e7eefb; background: #141c2c; } .panel { background: #1e293d; border-color: #354561; } button { background: #26344b; color: #dfebff; border-color: #5a7192; } button:hover:not(:disabled) { background: #344967; } .status { background: #33415b; } .muted, .eyebrow { color: #b5c5de; } .error { color: #ffb2bc; } }
+.status-watching { color: #0a6249; background: #def5e9; }
+.status-error { color: #a52132; background: #fbe3e8; }
