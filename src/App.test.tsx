@@ -126,4 +126,3 @@ test("a delayed command response cannot erase a newer watcher failure", async ()
   expect(screen.getByText("Error")).toBeInTheDocument();
   expect(screen.getByText("Folder disappeared.")).toBeInTheDocument();
 });
-
