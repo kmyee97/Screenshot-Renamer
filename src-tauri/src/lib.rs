@@ -25,6 +25,7 @@ pub mod settings;
 pub mod settings_controller;
 pub mod undo_service;
 pub mod vision_provider;
+pub mod vision_providers;
 
 #[tauri::command]
 async fn has_ai_credential() -> Result<bool, String> {
