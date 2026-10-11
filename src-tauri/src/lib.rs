@@ -10,6 +10,7 @@ pub mod folder_watcher;
 pub mod history_pipeline;
 pub mod history_store;
 pub mod history_ui;
+pub mod ocr_text_cleaner;
 pub mod rename_history;
 pub mod rename_recovery;
 pub mod rename_service;
