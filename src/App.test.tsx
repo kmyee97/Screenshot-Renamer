@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { test, expect } from "vitest";
+import { test, expect, vi, beforeEach } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+beforeEach(() => vi.mocked(invoke).mockResolvedValue({ settings: { version: 1, watchedFolder: null, autoRename: false }, warning: null }));
 
 test("shows the screenshot controls and an honest empty history", () => {
   render(<App />);
@@ -19,4 +22,11 @@ test("opens and closes settings without losing the main controls", () => {
   expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
   expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument();
+});
+
+test("restores the saved folder and shows nonfatal settings warnings", async () => {
+  vi.mocked(invoke).mockResolvedValue({ settings: { version: 1, watchedFolder: "C:/Screenshots", autoRename: false }, warning: "Recovered invalid settings." });
+  render(<App />);
+  expect(await screen.findByText("C:/Screenshots")).toBeInTheDocument();
+  expect(screen.getByText("Recovered invalid settings.")).toBeInTheDocument();
 });

@@ -13,6 +13,7 @@ pub mod rename_history;
 pub mod rename_recovery;
 pub mod rename_service;
 pub mod screenshot_file;
+pub mod settings;
 pub mod undo_service;
 
 pub use filename_sanitizer::{sanitize_stem, SanitizeError};
@@ -36,6 +37,59 @@ pub use undo_service::{undo_and_persist, undo_and_persist_suppressing, undo_rena
 
 #[derive(Default)]
 pub struct WatcherState(Mutex<Option<FolderWatcher>>);
+
+pub struct SettingsState {
+    store: Result<settings::SettingsStore, String>,
+    snapshot: Mutex<settings::SettingsSnapshot>,
+}
+impl SettingsState {
+    fn from_app(app: &AppHandle) -> Self {
+        let store = app
+            .path()
+            .app_config_dir()
+            .map(|directory| settings::SettingsStore::new(directory.join("settings.json")))
+            .map_err(|error| error.to_string());
+        let snapshot = match &store {
+            Ok(store) => store.load(),
+            Err(error) => settings::SettingsSnapshot {
+                settings: Default::default(),
+                warning: Some(error.clone()),
+            },
+        };
+        Self {
+            store,
+            snapshot: Mutex::new(snapshot),
+        }
+    }
+}
+#[tauri::command]
+fn get_settings(state: State<'_, SettingsState>) -> Result<settings::SettingsSnapshot, String> {
+    state
+        .snapshot
+        .lock()
+        .map(|snapshot| snapshot.clone())
+        .map_err(|_| "Settings are unavailable.".into())
+}
+#[tauri::command]
+fn update_settings(
+    state: State<'_, SettingsState>,
+    settings: settings::ApplicationSettings,
+) -> Result<settings::SettingsSnapshot, String> {
+    let mut snapshot = state
+        .snapshot
+        .lock()
+        .map_err(|_| "Settings are unavailable.")?;
+    state
+        .store
+        .as_ref()
+        .map_err(Clone::clone)?
+        .save(&settings)?;
+    *snapshot = settings::SettingsSnapshot {
+        settings,
+        warning: None,
+    };
+    Ok(snapshot.clone())
+}
 
 pub struct SuppressionState(Arc<SuppressedPaths>);
 
@@ -339,12 +393,15 @@ pub fn run() {
         .manage(WatcherState::default())
         .manage(SuppressionState::default())
         .setup(|app| {
+            app.manage(SettingsState::from_app(&app.handle()));
             let state = HistoryState::from_app(&app.handle());
             app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            get_settings,
+            update_settings,
             start_watching,
             stop_watching,
             startup_history,
