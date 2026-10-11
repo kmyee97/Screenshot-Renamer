@@ -38,6 +38,7 @@ p { line-height: 1.5; }
 .naming-settings label { font-size: .9rem; font-weight: 600; }
 .naming-settings input, .naming-settings select { font: inherit; padding: .6rem; border: 1px solid #b6c5dc; border-radius: .5rem; min-width: 0; width: 100%; color: inherit; background: transparent; }
 .naming-settings select:focus-visible { outline: 3px solid #4479cc; outline-offset: 3px; }
+.naming-settings input[type="checkbox"] { width: 18px; height: 18px; padding: 0; margin-right: 8px; vertical-align: middle; accent-color: #2359a4; }
 .naming-settings button { justify-self: start; }
 .naming-settings p { margin: 0; }
 .filename-preview { overflow-wrap: anywhere; padding: 10px; background: #edf1f7; border-radius: .5rem; font-size: .9rem; }

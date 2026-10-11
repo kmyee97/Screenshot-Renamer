@@ -8,6 +8,8 @@ import { WatcherControls } from "./components/WatcherControls";
 import { RecentRenames } from "./components/RecentRenames";
 import { PipelineNotice } from "./components/PipelineNotice";
 import { NamingSettings } from "./components/NamingSettings";
+import { AiSettings } from "./components/AiSettings";
+import type { AiPreferences } from "./types";
 import "./App.css";
 
 function App() {
@@ -53,6 +55,13 @@ function App() {
     try { commitResponse(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, naming: rules } }), revision); }
     finally { setSavingNaming(false); }
   }
+  async function saveAnalysis(ai: AiPreferences) {
+    if (!snapshot || choosing || toggling || savingNaming) throw "Wait for the current settings operation to finish.";
+    setSavingNaming(true);
+    const revision = watcherEvent.current.revision;
+    try { commitResponse(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, ai } }), revision); }
+    finally { setSavingNaming(false); }
+  }
   useEffect(() => {
     let active = true;
     let unlisten: UnlistenFn | undefined;
@@ -85,11 +94,13 @@ function App() {
       <WatcherControls snapshot={snapshot} pending={choosing || toggling || savingNaming} onToggle={toggleAutoRename} />
       <RecentRenames />
       <PipelineNotice />
+      <p className="muted">Analysis mode: {snapshot?.settings.ai?.mode ?? "local"}{snapshot?.settings.ai?.mode && snapshot.settings.ai.mode !== "local" ? " · OpenAI may receive screenshot images" : " · On this device"}</p>
       {settingsOpen ? <section className="panel" id="settings-panel" aria-labelledby="settings-heading">
         <div className="section-header"><h2 id="settings-heading">Settings</h2><button onClick={() => setSettingsOpen(false)}>Close settings</button></div>
         <p>Folder: {snapshot?.settings.watchedFolder ?? "Not configured"}</p>
         <p>Auto Rename preference: {snapshot?.settings.autoRename ? "On" : "Off"}</p>
         {snapshot ? <NamingSettings value={snapshot.settings.naming} disabled={choosing || toggling || savingNaming} onSave={saveNaming} /> : null}
+        {snapshot ? <AiSettings value={snapshot.settings.ai} disabled={choosing || toggling || savingNaming} onSave={saveAnalysis} /> : null}
         <p className="muted">Preferences are saved on this device.</p>
       </section> : null}
     </main>

@@ -1,6 +1,8 @@
 export type NamingPreset = "descriptive" | "minimal" | "coding" | "workResearch" | "receiptsOrders";
 export type NamingRules = { preset: NamingPreset; template: string | null; maxStemLength: number; separator: "-" | "_" };
-export type ApplicationSettings = { version: number; watchedFolder: string | null; autoRename: boolean; naming?: NamingRules };
+export type ProcessingMode = "local" | "ai" | "hybrid";
+export type AiPreferences = { mode: ProcessingMode; enabled: boolean; cloudConsent: boolean; provider: "openAi"; model: string };
+export type ApplicationSettings = { version: number; watchedFolder: string | null; autoRename: boolean; naming?: NamingRules; ai?: AiPreferences };
 export type WatcherEvent = { watcherStatus: "Watching" | "Paused" | "Error"; watcherError: string | null };
 export type SettingsSnapshot = WatcherEvent & { settings: ApplicationSettings; warning: string | null };
 export function errorMessage(error: unknown): string {

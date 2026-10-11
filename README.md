@@ -32,4 +32,8 @@ Names use lowercase terms, conservative stop words, Windows sanitization, and a 
 
 Windows OCR operations share a three-second deadline and cancel stalled work before fallback naming. Watcher lifecycle commands run on a background thread. Saving naming preferences preserves in-flight analysis and queued screenshots: the current screenshot retains its starting rules, and subsequent screenshots use the saved rules.
 
+## AI privacy preferences
+
+New installs and older settings default to Local. In Settings, selecting AI or Hybrid requires checking the explicit screenshot-upload consent box and saving the preference. Returning to Local disables cloud analysis. The provider and model choice persist in settings; API keys are stored separately in Windows Credential Manager under `ScreenshotRenamer/OpenAI`, never in settings JSON or rename history. The UI accepts a key only for entry, clears it immediately after submission, and can remove a saved key. Saving a key alone grants no upload consent. An unavailable credential store or missing key is a recoverable configuration error.
+
 The OCR contracts include text PNG/JPEG and blank PNG fixtures. Generate these fixtures with Arial 44 pt text `SCREENSHOT ORDER 12345` on a 960×180 white canvas. Run native OCR and filesystem tests outside filesystem-isolating sandboxes, which can change Windows collision error codes. Windows native tests need an installed OCR language matching the user's profile.
