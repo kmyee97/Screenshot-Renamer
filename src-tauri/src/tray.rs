@@ -34,8 +34,12 @@ pub struct TrayState {
     status: MenuItem<tauri::Wry>,
     toggle: MenuItem<tauri::Wry>,
     pub quitting: AtomicBool,
+    pub window_intents: std::sync::Arc<crate::desktop::WindowIntents>,
 }
 pub fn show_main(app: &AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<TrayState>() {
+        state.window_intents.cancel();
+    }
     let window = app
         .get_webview_window("main")
         .ok_or("Main window unavailable.")?;
@@ -48,6 +52,20 @@ pub fn show_main(app: &AppHandle) -> Result<(), String> {
 pub fn report_error(app: &AppHandle, message: &str) {
     let _ = show_main(app);
     let _ = app.emit("desktop-error", message);
+}
+pub fn quit(app: &AppHandle) {
+    if let Some(state) = app.try_state::<TrayState>() {
+        if state.quitting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(mut controller) = app.state::<crate::SettingsState>().controller.lock() {
+            controller.shutdown();
+        }
+        app.exit(0);
+    });
 }
 pub fn refresh(
     app: &AppHandle,
@@ -137,18 +155,7 @@ pub fn initialize(app: &AppHandle, snapshot: &SettingsSnapshot) -> tauri::Result
                 });
             }
             "tray-quit" => {
-                if let Some(state) = app.try_state::<TrayState>() {
-                    state.quitting.store(true, Ordering::SeqCst);
-                }
-                let app = app.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Ok(mut controller) =
-                        app.state::<crate::SettingsState>().controller.lock()
-                    {
-                        controller.shutdown();
-                    }
-                    app.exit(0);
-                });
+                self::quit(app);
             }
             _ => {}
         })
@@ -158,6 +165,7 @@ pub fn initialize(app: &AppHandle, snapshot: &SettingsSnapshot) -> tauri::Result
         status,
         toggle,
         quitting: AtomicBool::new(false),
+        window_intents: Default::default(),
     });
     Ok(())
 }

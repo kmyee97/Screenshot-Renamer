@@ -81,6 +81,26 @@ test("tray Settings opens the settings panel and cleans up its listener", async 
   expect(release).toHaveBeenCalledOnce();
 });
 
+test("minimize preference saves without changing the watched folder", async () => {
+  let settings = { version: 1, watchedFolder: "C:/Screenshots", autoRename: false, desktop: { minimizeToTray: true } };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if(command === "preview_naming") return "example-screenshot";
+    if(command === "has_ai_credential") return false;
+    if(command === "list_analysis_failures") return [];
+    if(command === "get_recent_history") return {entries: [], undoLast: null};
+    if(command === "update_settings") settings = (args as {settings: typeof settings}).settings;
+    return {settings, watcherStatus: "Paused", watcherError: null, warning: null};
+  });
+  render(<App />);
+  await screen.findByText("C:/Screenshots");
+  fireEvent.click(screen.getByRole("button", {name:"Settings"}));
+  const toggle=screen.getByRole("checkbox", {name:"Minimize to tray"});
+  expect(toggle).toBeChecked();
+  fireEvent.click(toggle);
+  await waitFor(()=>expect(toggle).not.toBeChecked());
+  expect(screen.getByText("C:/Screenshots")).toBeInTheDocument();
+});
+
 test("restores the saved folder and shows nonfatal settings warnings", async () => {
   vi.mocked(invoke).mockImplementation(async command => command === "list_analysis_failures" ? [] : command === "get_recent_history" ? { entries: [], undoLast: null } : { settings: { version: 1, watchedFolder: "C:/Screenshots", autoRename: false }, warning: "Recovered invalid settings." });
   render(<App />);

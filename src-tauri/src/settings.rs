@@ -15,6 +15,8 @@ pub struct ApplicationSettings {
     pub naming: crate::naming_engine::NamingRules,
     #[serde(default)]
     pub ai: crate::ai_settings::AiSettings,
+    #[serde(default)]
+    pub desktop: crate::desktop::DesktopPreferences,
 }
 impl Default for ApplicationSettings {
     fn default() -> Self {
@@ -24,6 +26,7 @@ impl Default for ApplicationSettings {
             auto_rename: false,
             naming: Default::default(),
             ai: Default::default(),
+            desktop: Default::default(),
         }
     }
 }
