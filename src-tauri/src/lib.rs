@@ -14,6 +14,7 @@ pub mod rename_history;
 pub mod rename_recovery;
 pub mod rename_service;
 pub mod screenshot_file;
+pub mod screenshot_metadata;
 pub mod settings;
 pub mod settings_controller;
 pub mod undo_service;
