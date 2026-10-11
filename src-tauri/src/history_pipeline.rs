@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     rename_screenshot_recorded, HistoryRepository, HistoryStoreError, RenameError,
-    RenameHistoryView, ScreenshotFile,
+    RenameHistoryEntry, RenameHistoryView, ScreenshotFile,
 };
 
 #[derive(Debug)]
@@ -17,6 +17,8 @@ pub enum PersistedRenameError {
     },
     Storage {
         actual_path: PathBuf,
+        /// Retain the confirmed outcome so recovery only retries persistence.
+        pending_history: RenameHistoryEntry,
         error: HistoryStoreError,
     },
 }
@@ -35,7 +37,9 @@ impl fmt::Display for PersistedRenameError {
             Self::Rename { actual_path, error } => {
                 write!(f, "rename failed at {}: {error}", actual_path.display())
             }
-            Self::Storage { actual_path, error } => write!(
+            Self::Storage {
+                actual_path, error, ..
+            } => write!(
                 f,
                 "history storage failed; screenshot is at {}: {error}",
                 actual_path.display()
@@ -62,6 +66,7 @@ pub fn rename_screenshot_and_persist<R: HistoryRepository>(
         .append(&recorded.history)
         .map_err(|error| PersistedRenameError::Storage {
             actual_path: actual_path.clone(),
+            pending_history: recorded.history.clone(),
             error,
         })?;
     recorded

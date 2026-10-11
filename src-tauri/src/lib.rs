@@ -10,6 +10,7 @@ pub mod folder_watcher;
 pub mod history_pipeline;
 pub mod history_store;
 pub mod rename_history;
+pub mod rename_recovery;
 pub mod rename_service;
 pub mod screenshot_file;
 pub mod undo_service;
@@ -24,6 +25,7 @@ pub use history_store::{HistoryRepository, HistoryStore, HistoryStoreError};
 pub use rename_history::{
     HistoryError, RenameHistoryEntry, RenameHistoryView, RenameOutcome, UndoStatus,
 };
+pub use rename_recovery::{RenameFailure, RenameFailureCategory, RenameRecovery};
 pub use rename_service::{
     rename_screenshot, rename_screenshot_recorded, RecordedRename, RenameError,
 };
@@ -48,6 +50,7 @@ pub struct HistoryState {
     /// Snapshot loaded during app startup for future UI integration.
     startup_recent: Vec<RenameHistoryView>,
     undo_gate: Arc<Mutex<()>>,
+    recovery: Arc<Mutex<RenameRecovery>>,
 }
 
 impl HistoryState {
@@ -70,6 +73,7 @@ impl HistoryState {
             database_path,
             startup_recent,
             undo_gate: Arc::new(Mutex::new(())),
+            recovery: Arc::new(Mutex::new(RenameRecovery::default())),
         }
     }
 
@@ -150,20 +154,135 @@ fn startup_history(state: State<'_, HistoryState>) -> Vec<RenameHistoryView> {
 
 #[tauri::command]
 async fn rename_and_record(
+    app: AppHandle,
     state: State<'_, HistoryState>,
     original_path: String,
     candidate_stem: String,
-) -> Result<RenameHistoryView, String> {
-    let path = state.path()?;
+) -> Result<RenameHistoryView, RenameFailure> {
+    let path = state.path();
+    let gate = Arc::clone(&state.undo_gate);
+    let recovery = Arc::clone(&state.recovery);
+    let error_path = original_path.clone();
+    let event_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate
+            .lock()
+            .map_err(|_| command_failure(&original_path, "rename lock is unavailable"))?;
+        let mut recovery = recovery
+            .lock()
+            .map_err(|_| command_failure(&original_path, "rename recovery is unavailable"))?;
+        let result = (|| {
+            let original = std::path::absolute(&original_path)
+                .map_err(|error| command_failure(&original_path, &error.to_string()))?;
+            let screenshot = ScreenshotFile::new(original, None).map_err(|_| {
+                command_failure(&original_path, "Choose a screenshot file with a filename.")
+            })?;
+            let store = path
+                .map_err(HistoryStoreError)
+                .and_then(|path| HistoryStore::open(&path));
+            recovery.rename(
+                screenshot,
+                &candidate_stem,
+                store
+                    .as_ref()
+                    .map_err(|error| HistoryStoreError(error.to_string())),
+            )
+        })();
+        emit_rename_result(&event_app, &result);
+        result
+    })
+    .await
+    .map_err(|error| command_failure(&error_path, &error.to_string()))?;
+    result
+}
+
+#[tauri::command]
+async fn list_rename_failures(
+    state: State<'_, HistoryState>,
+) -> Result<Vec<RenameFailure>, String> {
+    let recovery = Arc::clone(&state.recovery);
     tauri::async_runtime::spawn_blocking(move || {
-        let store = HistoryStore::open(&path).map_err(|error| error.to_string())?;
-        let mut screenshot = ScreenshotFile::new(PathBuf::from(original_path), None)
-            .map_err(|error| format!("invalid screenshot path: {error:?}"))?;
-        rename_screenshot_and_persist(&mut screenshot, &candidate_stem, &store)
-            .map_err(|error| error.to_string())
+        recovery
+            .lock()
+            .map(|recovery| recovery.failures())
+            .map_err(|_| "rename recovery is unavailable".into())
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameRetryResult {
+    id: String,
+    history: Option<RenameHistoryView>,
+    failure: Option<RenameFailure>,
+}
+
+#[tauri::command]
+async fn retry_rename(
+    app: AppHandle,
+    state: State<'_, HistoryState>,
+    id: String,
+    candidate_stem: Option<String>,
+) -> Result<RenameHistoryView, RenameFailure> {
+    let path = state.path();
+    let gate = Arc::clone(&state.undo_gate);
+    let recovery = Arc::clone(&state.recovery);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate
+            .lock()
+            .map_err(|_| command_failure("", "rename lock is unavailable"))?;
+        let mut recovery = recovery
+            .lock()
+            .map_err(|_| command_failure("", "rename recovery is unavailable"))?;
+        let store = path
+            .map_err(HistoryStoreError)
+            .and_then(|path| HistoryStore::open(&path));
+        let result = recovery.retry(
+            &id,
+            candidate_stem.as_deref(),
+            store
+                .as_ref()
+                .map_err(|error| HistoryStoreError(error.to_string())),
+        );
+        emit_rename_result(&app, &result);
+        let event = RenameRetryResult {
+            id,
+            history: result.as_ref().ok().cloned(),
+            failure: result.as_ref().err().cloned(),
+        };
+        let _ = app.emit("screenshot-rename-retry-result", event);
+        result
+    })
+    .await
+    .map_err(|error| command_failure("", &error.to_string()))?;
+    result
+}
+
+fn command_failure(path: &str, message: &str) -> RenameFailure {
+    RenameFailure {
+        id: String::new(),
+        category: RenameFailureCategory::RetryUnavailable,
+        source_path: path.into(),
+        attempted_destination: None,
+        actual_path: path.into(),
+        stage: "prepare".into(),
+        message: message.into(),
+        retryable: false,
+        filesystem_succeeded: false,
+    }
+}
+
+fn emit_rename_result(app: &AppHandle, result: &Result<RenameHistoryView, RenameFailure>) {
+    match result {
+        Ok(history) => {
+            let _ = app.emit("screenshot-renamed", history);
+        }
+        Err(failure) => {
+            let _ = app.emit("screenshot-rename-failed", failure);
+        }
+    }
 }
 
 #[tauri::command]
@@ -231,6 +350,8 @@ pub fn run() {
             startup_history,
             list_recent_history,
             rename_and_record,
+            list_rename_failures,
+            retry_rename,
             undo_history
         ])
         .run(tauri::generate_context!())
