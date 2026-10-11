@@ -55,6 +55,7 @@ pub fn validate_folder(folder: &str) -> Result<PathBuf, String> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsSnapshot {
+    pub revision: u64,
     pub settings: ApplicationSettings,
     pub warning: Option<String>,
     pub watcher_status: String,
@@ -63,6 +64,7 @@ pub struct SettingsSnapshot {
 impl SettingsSnapshot {
     pub fn new(settings: ApplicationSettings, warning: Option<String>) -> Self {
         Self {
+            revision: 0,
             settings,
             warning,
             watcher_status: "Paused".into(),

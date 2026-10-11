@@ -87,6 +87,12 @@ impl<W: WatchSession> SettingsController<W> {
             .as_ref()
             .is_some_and(|active| active.enabled.load(Ordering::SeqCst))
     }
+    pub fn shutdown(&mut self) {
+        self.active.take();
+    }
+    pub fn set_warning(&mut self, message: String) {
+        self.snapshot.warning = Some(message);
+    }
     pub fn restore<F>(&mut self, start: F)
     where
         F: FnOnce(&str, Arc<AtomicBool>, Arc<Mutex<Option<String>>>) -> Result<W, String>,

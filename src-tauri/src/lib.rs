@@ -24,6 +24,7 @@ pub mod screenshot_file;
 pub mod screenshot_metadata;
 pub mod settings;
 pub mod settings_controller;
+pub mod tray;
 pub mod undo_service;
 pub mod vision_provider;
 pub mod vision_providers;
@@ -85,6 +86,11 @@ pub use undo_service::{undo_and_persist, undo_and_persist_suppressing, undo_rena
 pub struct SettingsState {
     controller: Arc<Mutex<settings_controller::SettingsController<FolderWatcher>>>,
 }
+#[derive(Default)]
+struct WatcherPublication {
+    gate: Mutex<()>,
+    revision: Arc<std::sync::atomic::AtomicU64>,
+}
 impl SettingsState {
     fn from_app(app: &AppHandle) -> Self {
         let store = app
@@ -101,13 +107,25 @@ impl SettingsState {
 }
 #[tauri::command]
 async fn get_settings(
+    app: AppHandle,
     state: State<'_, SettingsState>,
 ) -> Result<settings::SettingsSnapshot, String> {
     let controller = state.controller.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let publication = app.state::<WatcherPublication>();
+        let _publication_guard = publication
+            .gate
+            .lock()
+            .map_err(|_| "Settings are unavailable.")?;
         controller
             .lock()
-            .map(|controller| controller.snapshot())
+            .map(|controller| {
+                let mut snapshot = controller.snapshot();
+                snapshot.revision = publication
+                    .revision
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                snapshot
+            })
             .map_err(|_| "Settings are unavailable.".into())
     })
     .await
@@ -130,8 +148,9 @@ async fn update_settings(
         let result = controller.apply(settings, |folder, enabled, error| {
             prepare_watcher(&app, folder, enabled, error, suppression, rules)
         });
-        let _ = app.emit("watcher-state-changed", controller.snapshot());
-        result
+        drop(controller);
+        let snapshot = publish_watcher_state(&app)?;
+        result.map(|_| snapshot)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -144,23 +163,53 @@ async fn set_auto_rename(
     suppression: State<'_, SuppressionState>,
     enabled: bool,
 ) -> Result<settings::SettingsSnapshot, String> {
-    let shared_controller = state.controller.clone();
+    let controller = state.controller.clone();
     let suppression = suppression.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut controller = shared_controller
-            .lock()
-            .map_err(|_| "Settings are unavailable.")?;
-        let mut settings = controller.snapshot().settings;
-        settings.auto_rename = enabled;
-        let rules = controller.processing_settings();
-        let result = controller.apply(settings, |folder, enabled, error| {
-            prepare_watcher(&app, folder, enabled, error, suppression, rules)
-        });
-        let _ = app.emit("watcher-state-changed", controller.snapshot());
-        result
+        apply_auto_rename(&app, controller, suppression, Some(enabled))
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+fn publish_watcher_state(app: &AppHandle) -> Result<settings::SettingsSnapshot, String> {
+    let publication = app.state::<WatcherPublication>();
+    let _guard = publication
+        .gate
+        .lock()
+        .map_err(|_| "Settings are unavailable.")?;
+    let mut snapshot = app
+        .state::<SettingsState>()
+        .controller
+        .lock()
+        .map_err(|_| "Settings are unavailable.")?
+        .snapshot();
+    snapshot.revision = publication
+        .revision
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+    let _ = app.emit("watcher-state-changed", &snapshot);
+    tray::refresh(app, &snapshot, publication.revision.clone());
+    Ok(snapshot)
+}
+fn apply_auto_rename(
+    app: &AppHandle,
+    shared_controller: Arc<Mutex<settings_controller::SettingsController<FolderWatcher>>>,
+    suppression: Arc<SuppressedPaths>,
+    enabled: Option<bool>,
+) -> Result<settings::SettingsSnapshot, String> {
+    let mut controller = shared_controller
+        .lock()
+        .map_err(|_| "Settings are unavailable.")?;
+    let mut settings = controller.snapshot().settings;
+    settings.auto_rename = enabled.unwrap_or(!settings.auto_rename);
+    let rules = controller.processing_settings();
+    let result = controller.apply(settings, |folder, enabled, error| {
+        prepare_watcher(app, folder, enabled, error, suppression, rules)
+    });
+    drop(controller);
+    let snapshot = publish_watcher_state(app)?;
+    result.map(|_| snapshot)
 }
 
 fn prepare_watcher(
@@ -201,10 +250,10 @@ fn prepare_watcher(
             if let Ok(mut failure) = error.lock() {
                 *failure = Some(message.clone());
             }
-            let _ = error_app.emit(
-                "watcher-state-changed",
-                serde_json::json!({ "watcherStatus": "Error", "watcherError": message }),
-            );
+            let app = error_app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = publish_watcher_state(&app);
+            });
         },
     )
     .map_err(|error| error.to_string())
@@ -451,7 +500,7 @@ async fn start_watching(
     let settings = settings::ApplicationSettings {
         watched_folder: Some(directory),
         auto_rename: true,
-        ..get_settings(state.clone()).await?.settings
+        ..get_settings(app.clone(), state.clone()).await?.settings
     };
     update_settings(app, state, suppression, settings)
         .await
@@ -706,10 +755,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(SuppressionState::default())
         .manage(AnalysisState::default())
+        .manage(WatcherPublication::default())
         .setup(|app| {
             app.manage(HistoryState::from_app(&app.handle()));
             let settings = SettingsState::from_app(&app.handle());
+            app.manage(settings);
             {
+                let settings = app.state::<SettingsState>();
                 let mut controller = settings
                     .controller
                     .lock()
@@ -726,7 +778,19 @@ pub fn run() {
                     )
                 });
             }
-            app.manage(settings);
+            let snapshot = app
+                .state::<SettingsState>()
+                .controller
+                .lock()
+                .map_err(|_| "Settings unavailable")?
+                .snapshot();
+            if tray::initialize(app.handle(), &snapshot).is_err() {
+                app.state::<SettingsState>()
+                    .controller
+                    .lock()
+                    .map_err(|_| "Settings unavailable")?
+                    .set_warning("System tray unavailable. Keep the main window open.".into());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
