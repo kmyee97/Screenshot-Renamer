@@ -20,11 +20,14 @@ impl WindowIntents {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopPreferences {
     pub minimize_to_tray: bool,
+    #[serde(default)]
+    pub start_with_windows: bool,
 }
 impl Default for DesktopPreferences {
     fn default() -> Self {
         Self {
             minimize_to_tray: true,
+            start_with_windows: false,
         }
     }
 }

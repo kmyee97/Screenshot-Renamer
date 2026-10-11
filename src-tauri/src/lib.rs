@@ -25,6 +25,7 @@ pub mod screenshot_file;
 pub mod screenshot_metadata;
 pub mod settings;
 pub mod settings_controller;
+pub mod startup;
 pub mod tray;
 pub mod undo_service;
 pub mod vision_provider;
@@ -752,6 +753,16 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(startup::LaunchState::default())
+        .manage(startup::StartupGate::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == "--autostart") {
+                app.state::<startup::LaunchState>()
+                    .0
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = tray::show_main(app);
+            }
+        }))
         .on_window_event(desktop::handle_window_event)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -793,10 +804,23 @@ pub fn run() {
                     .map_err(|_| "Settings unavailable")?
                     .set_warning("System tray unavailable. Keep the main window open.".into());
             }
+            let hidden = startup::start_hidden(
+                std::env::args().any(|arg| arg == "--autostart"),
+                app.try_state::<tray::TrayState>().is_some(),
+                app.state::<startup::LaunchState>()
+                    .0
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                snapshot.watcher_status == "Error" || snapshot.warning.is_some(),
+            );
+            if !hidden {
+                let _ = tray::show_main(app.handle());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            startup::get_startup_enabled,
+            startup::set_startup_enabled,
             has_ai_credential,
             set_ai_credential,
             delete_ai_credential,
