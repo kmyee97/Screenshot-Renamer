@@ -11,6 +11,8 @@ pub struct ApplicationSettings {
     pub version: u32,
     pub watched_folder: Option<String>,
     pub auto_rename: bool,
+    #[serde(default)]
+    pub naming: crate::naming_engine::NamingRules,
 }
 impl Default for ApplicationSettings {
     fn default() -> Self {
@@ -18,11 +20,13 @@ impl Default for ApplicationSettings {
             version: 1,
             watched_folder: None,
             auto_rename: false,
+            naming: Default::default(),
         }
     }
 }
 impl ApplicationSettings {
     pub fn validate(&self) -> Result<(), String> {
+        self.naming.validate().map_err(|error| error.to_string())?;
         if self.version != 1 {
             return Err("Unsupported settings version; defaults restored.".into());
         }
@@ -94,6 +98,10 @@ impl SettingsStore {
         settings: &ApplicationSettings,
         pausing: bool,
     ) -> Result<(), String> {
+        settings
+            .naming
+            .validate()
+            .map_err(|error| error.to_string())?;
         if !pausing {
             settings.validate()?;
         }

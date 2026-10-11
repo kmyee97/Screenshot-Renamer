@@ -33,4 +33,13 @@ p { line-height: 1.5; }
 .rename-names span, .rename-names strong { min-width: 0; max-width: 100%; }
 .rename-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #59677e; font-size: .8rem; margin-top: 8px; }
 .row-undo { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.naming-settings { border: 0; padding: 0; margin: 20px 0 0; display: grid; gap: 10px; min-width: 0; }
+.naming-settings legend { font-weight: 600; margin-bottom: 12px; }
+.naming-settings label { font-size: .9rem; font-weight: 600; }
+.naming-settings input, .naming-settings select { font: inherit; padding: .6rem; border: 1px solid #b6c5dc; border-radius: .5rem; min-width: 0; width: 100%; color: inherit; background: transparent; }
+.naming-settings select:focus-visible { outline: 3px solid #4479cc; outline-offset: 3px; }
+.naming-settings button { justify-self: start; }
+.naming-settings p { margin: 0; }
+.filename-preview { overflow-wrap: anywhere; padding: 10px; background: #edf1f7; border-radius: .5rem; font-size: .9rem; }
+@media (prefers-color-scheme: dark) { .filename-preview { background: #33415b; } .naming-settings option { background: #1e293d; } }
 @media (prefers-color-scheme: dark) { .rename-meta { color: #b5c5de; } }

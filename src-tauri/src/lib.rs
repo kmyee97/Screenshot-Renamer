@@ -11,6 +11,7 @@ pub mod history_pipeline;
 pub mod history_store;
 pub mod history_ui;
 pub mod naming_engine;
+pub mod naming_templates;
 pub mod ocr_service;
 pub mod ocr_text_cleaner;
 pub mod rename_history;
@@ -43,7 +44,7 @@ pub use screenshot_file::{
 pub use undo_service::{undo_and_persist, undo_and_persist_suppressing, undo_rename, UndoError};
 
 pub struct SettingsState {
-    controller: Mutex<settings_controller::SettingsController<FolderWatcher>>,
+    controller: Arc<Mutex<settings_controller::SettingsController<FolderWatcher>>>,
 }
 impl SettingsState {
     fn from_app(app: &AppHandle) -> Self {
@@ -53,54 +54,74 @@ impl SettingsState {
             .map(|directory| settings::SettingsStore::new(directory.join("settings.json")))
             .map_err(|error| error.to_string());
         Self {
-            controller: Mutex::new(settings_controller::SettingsController::new(store)),
+            controller: Arc::new(Mutex::new(settings_controller::SettingsController::new(
+                store,
+            ))),
         }
     }
 }
 #[tauri::command]
-fn get_settings(state: State<'_, SettingsState>) -> Result<settings::SettingsSnapshot, String> {
-    state
-        .controller
-        .lock()
-        .map(|controller| controller.snapshot())
-        .map_err(|_| "Settings are unavailable.".into())
+async fn get_settings(
+    state: State<'_, SettingsState>,
+) -> Result<settings::SettingsSnapshot, String> {
+    let controller = state.controller.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        controller
+            .lock()
+            .map(|controller| controller.snapshot())
+            .map_err(|_| "Settings are unavailable.".into())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 #[tauri::command]
-fn update_settings(
+async fn update_settings(
     app: AppHandle,
     state: State<'_, SettingsState>,
     suppression: State<'_, SuppressionState>,
     settings: settings::ApplicationSettings,
 ) -> Result<settings::SettingsSnapshot, String> {
-    let mut controller = state
-        .controller
-        .lock()
-        .map_err(|_| "Settings are unavailable.")?;
-    let result = controller.apply(settings, |folder, enabled, error| {
-        prepare_watcher(&app, folder, enabled, error, Arc::clone(&suppression.0))
-    });
-    let _ = app.emit("watcher-state-changed", controller.snapshot());
-    result
+    let shared_controller = state.controller.clone();
+    let suppression = suppression.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut controller = shared_controller
+            .lock()
+            .map_err(|_| "Settings are unavailable.")?;
+        let rules = controller.naming_rules();
+        let result = controller.apply(settings, |folder, enabled, error| {
+            prepare_watcher(&app, folder, enabled, error, suppression, rules)
+        });
+        let _ = app.emit("watcher-state-changed", controller.snapshot());
+        result
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn set_auto_rename(
+async fn set_auto_rename(
     app: AppHandle,
     state: State<'_, SettingsState>,
     suppression: State<'_, SuppressionState>,
     enabled: bool,
 ) -> Result<settings::SettingsSnapshot, String> {
-    let mut controller = state
-        .controller
-        .lock()
-        .map_err(|_| "Settings are unavailable.")?;
-    let mut settings = controller.snapshot().settings;
-    settings.auto_rename = enabled;
-    let result = controller.apply(settings, |folder, enabled, error| {
-        prepare_watcher(&app, folder, enabled, error, Arc::clone(&suppression.0))
-    });
-    let _ = app.emit("watcher-state-changed", controller.snapshot());
-    result
+    let shared_controller = state.controller.clone();
+    let suppression = suppression.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut controller = shared_controller
+            .lock()
+            .map_err(|_| "Settings are unavailable.")?;
+        let mut settings = controller.snapshot().settings;
+        settings.auto_rename = enabled;
+        let rules = controller.naming_rules();
+        let result = controller.apply(settings, |folder, enabled, error| {
+            prepare_watcher(&app, folder, enabled, error, suppression, rules)
+        });
+        let _ = app.emit("watcher-state-changed", controller.snapshot());
+        result
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn prepare_watcher(
@@ -109,6 +130,7 @@ fn prepare_watcher(
     enabled: Arc<std::sync::atomic::AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     suppression: Arc<SuppressedPaths>,
+    rules: Arc<Mutex<naming_engine::NamingRules>>,
 ) -> Result<FolderWatcher, String> {
     let file_app = app.clone();
     let error_app = app.clone();
@@ -128,6 +150,7 @@ fn prepare_watcher(
                     file,
                     &processing_enabled,
                     &retained_suppression,
+                    &rules,
                 );
             }
         },
@@ -152,8 +175,13 @@ fn process_automatic_screenshot(
     file: ScreenshotFile,
     enabled: &std::sync::atomic::AtomicBool,
     suppression: &SuppressedPaths,
+    rules: &Mutex<naming_engine::NamingRules>,
 ) {
     // This callback runs on the folder watcher's worker after file readiness.
+    let rules = rules
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
     let mut metadata = screenshot_metadata::ScreenshotMetadata::from_file(&file);
     let analysis = ocr_service::analyze(file.original_path());
     if let Err(error) = &analysis {
@@ -170,7 +198,7 @@ fn process_automatic_screenshot(
     if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let candidate = match naming_engine::name(&metadata, &naming_engine::NamingRules::default()) {
+    let candidate = match naming_engine::name(&metadata, &rules) {
         Ok(candidate) => candidate,
         Err(error) => {
             let _ = app.emit(
@@ -257,7 +285,7 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-fn start_watching(
+async fn start_watching(
     app: AppHandle,
     state: State<'_, SettingsState>,
     suppression: State<'_, SuppressionState>,
@@ -266,17 +294,21 @@ fn start_watching(
     let settings = settings::ApplicationSettings {
         watched_folder: Some(directory),
         auto_rename: true,
-        ..get_settings(state.clone())?.settings
+        ..get_settings(state.clone()).await?.settings
     };
-    update_settings(app, state, suppression, settings).map(|_| ())
+    update_settings(app, state, suppression, settings)
+        .await
+        .map(|_| ())
 }
 #[tauri::command]
-fn stop_watching(
+async fn stop_watching(
     app: AppHandle,
     state: State<'_, SettingsState>,
     suppression: State<'_, SuppressionState>,
 ) -> Result<(), String> {
-    set_auto_rename(app, state, suppression, false).map(|_| ())
+    set_auto_rename(app, state, suppression, false)
+        .await
+        .map(|_| ())
 }
 #[tauri::command]
 async fn list_recent_history(
@@ -384,6 +416,11 @@ struct RenameRetryResult {
     id: String,
     history: Option<RenameHistoryView>,
     failure: Option<RenameFailure>,
+}
+
+#[tauri::command]
+fn preview_naming(rules: naming_engine::NamingRules) -> Result<String, String> {
+    naming_templates::preview(&rules).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -514,25 +551,30 @@ pub fn run() {
         .setup(|app| {
             app.manage(HistoryState::from_app(&app.handle()));
             let settings = SettingsState::from_app(&app.handle());
-            settings
-                .controller
-                .lock()
-                .map_err(|_| "Settings unavailable")?
-                .restore(|folder, enabled, error| {
+            {
+                let mut controller = settings
+                    .controller
+                    .lock()
+                    .map_err(|_| "Settings unavailable")?;
+                let rules = controller.naming_rules();
+                controller.restore(|folder, enabled, error| {
                     prepare_watcher(
                         &app.handle(),
                         folder,
                         enabled,
                         error,
                         Arc::clone(&app.state::<SuppressionState>().0),
+                        rules,
                     )
                 });
+            }
             app.manage(settings);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             greet,
             get_settings,
+            preview_naming,
             update_settings,
             set_auto_rename,
             start_watching,

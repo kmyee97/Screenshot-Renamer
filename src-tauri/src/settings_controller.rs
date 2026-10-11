@@ -29,6 +29,7 @@ pub struct SettingsController<W: WatchSession> {
     store: Result<SettingsStore, String>,
     snapshot: SettingsSnapshot,
     active: Option<Active<W>>,
+    naming_rules: Arc<Mutex<crate::naming_engine::NamingRules>>,
 }
 impl<W: WatchSession> SettingsController<W> {
     pub fn new(store: Result<SettingsStore, String>) -> Self {
@@ -37,6 +38,7 @@ impl<W: WatchSession> SettingsController<W> {
             Err(error) => SettingsSnapshot::new(Default::default(), Some(error.clone())),
         };
         Self {
+            naming_rules: Arc::new(Mutex::new(snapshot.settings.naming.clone())),
             store,
             snapshot,
             active: None,
@@ -64,6 +66,12 @@ impl<W: WatchSession> SettingsController<W> {
             None
         };
         snapshot
+    }
+    pub fn naming_rules(&self) -> Arc<Mutex<crate::naming_engine::NamingRules>> {
+        self.naming_rules.clone()
+    }
+    fn commit_naming(&self, settings: &ApplicationSettings) {
+        *self.naming_rules.lock().unwrap_or_else(|e| e.into_inner()) = settings.naming.clone();
     }
     pub fn is_watching(&self) -> bool {
         self.active
@@ -104,6 +112,10 @@ impl<W: WatchSession> SettingsController<W> {
         F: FnOnce(&str, Arc<AtomicBool>, Arc<Mutex<Option<String>>>) -> Result<W, String>,
     {
         // Pausing an unavailable folder must remain possible; validate a folder only when enabling or replacing it.
+        settings
+            .naming
+            .validate()
+            .map_err(|error| error.to_string())?;
         let pausing = !settings.auto_rename
             && settings.watched_folder == self.snapshot.settings.watched_folder;
         if pausing {
@@ -112,6 +124,18 @@ impl<W: WatchSession> SettingsController<W> {
             }
         } else {
             settings.validate()?;
+        }
+        if settings.watched_folder == self.snapshot.settings.watched_folder
+            && settings.auto_rename == self.snapshot.settings.auto_rename
+            && (!settings.auto_rename || self.is_watching())
+        {
+            self.store
+                .as_ref()
+                .map_err(Clone::clone)?
+                .save_preference(&settings, pausing)?;
+            self.commit_naming(&settings);
+            self.snapshot = SettingsSnapshot::new(settings, None);
+            return Ok(self.snapshot());
         }
         let enabled = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None));
@@ -135,6 +159,7 @@ impl<W: WatchSession> SettingsController<W> {
             .map_err(Clone::clone)?
             .save_preference(&settings, pausing)?;
         self.active.take();
+        self.commit_naming(&settings);
         enabled.store(settings.auto_rename, Ordering::SeqCst);
         self.active = candidate;
         self.snapshot = SettingsSnapshot::new(settings, None);

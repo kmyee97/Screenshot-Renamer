@@ -1,6 +1,6 @@
 [package]
 name = "screenshot-renamer"
-version = "0.1.23"
+version = "0.1.24"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -29,6 +29,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
+windows-future = "0.3.2"
 windows = { version = "0.62.2", features = ["Foundation", "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_System_Threading", "Win32_System_WinRT", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]

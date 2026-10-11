@@ -7,16 +7,20 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct NamingRules {
     pub max_stem_length: usize,
     pub separator: char,
+    pub preset: crate::naming_templates::NamingPreset,
+    pub template: Option<String>,
 }
 impl Default for NamingRules {
     fn default() -> Self {
         Self {
             max_stem_length: 120,
             separator: '-',
+            preset: Default::default(),
+            template: None,
         }
     }
 }
@@ -29,6 +33,9 @@ impl NamingRules {
         }
         if !matches!(self.separator, '-' | '_') {
             return Err(NamingError("Use a hyphen or underscore separator.".into()));
+        }
+        if let Some(template) = &self.template {
+            crate::naming_templates::validate_template(template)?;
         }
         Ok(())
     }
@@ -121,17 +128,10 @@ fn naming_terms(text: &str) -> Vec<String> {
 }
 
 pub fn name(metadata: &ScreenshotMetadata, rules: &NamingRules) -> Result<String, NamingError> {
-    let tokens = tokens(metadata);
-    let candidate = [tokens.app, tokens.topic, tokens.detail]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    let candidate = if candidate.is_empty() {
-        format!("screenshot-{}", tokens.timestamp)
-    } else {
-        candidate
-    };
+    let candidate = crate::naming_templates::render(
+        rules.template.as_deref().unwrap_or(rules.preset.template()),
+        metadata,
+    )?;
     finish_stem(metadata, rules, &candidate)
 }
 
