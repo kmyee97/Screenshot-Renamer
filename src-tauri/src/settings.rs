@@ -13,6 +13,8 @@ pub struct ApplicationSettings {
     pub auto_rename: bool,
     #[serde(default)]
     pub naming: crate::naming_engine::NamingRules,
+    #[serde(default)]
+    pub ai: crate::ai_settings::AiSettings,
 }
 impl Default for ApplicationSettings {
     fn default() -> Self {
@@ -21,11 +23,13 @@ impl Default for ApplicationSettings {
             watched_folder: None,
             auto_rename: false,
             naming: Default::default(),
+            ai: Default::default(),
         }
     }
 }
 impl ApplicationSettings {
     pub fn validate(&self) -> Result<(), String> {
+        self.ai.validate().map_err(|error| error.to_string())?;
         self.naming.validate().map_err(|error| error.to_string())?;
         if self.version != 1 {
             return Err("Unsupported settings version; defaults restored.".into());
@@ -98,6 +102,7 @@ impl SettingsStore {
         settings: &ApplicationSettings,
         pausing: bool,
     ) -> Result<(), String> {
+        settings.ai.validate().map_err(|error| error.to_string())?;
         settings
             .naming
             .validate()

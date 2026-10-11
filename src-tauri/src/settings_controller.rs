@@ -112,6 +112,7 @@ impl<W: WatchSession> SettingsController<W> {
         F: FnOnce(&str, Arc<AtomicBool>, Arc<Mutex<Option<String>>>) -> Result<W, String>,
     {
         // Pausing an unavailable folder must remain possible; validate a folder only when enabling or replacing it.
+        settings.ai.validate().map_err(|error| error.to_string())?;
         settings
             .naming
             .validate()

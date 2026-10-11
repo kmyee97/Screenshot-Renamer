@@ -5,6 +5,8 @@ use std::{
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
+pub mod ai_settings;
+pub mod credentials;
 pub mod filename_sanitizer;
 pub mod folder_watcher;
 pub mod history_pipeline;
@@ -23,6 +25,40 @@ pub mod settings;
 pub mod settings_controller;
 pub mod undo_service;
 pub mod vision_provider;
+
+#[tauri::command]
+async fn has_ai_credential() -> Result<bool, String> {
+    use credentials::CredentialStore;
+    tauri::async_runtime::spawn_blocking(|| {
+        credentials::OsCredentials::default()
+            .exists()
+            .map_err(|_| "Credential storage is unavailable.".to_string())
+    })
+    .await
+    .map_err(|_| "Credential storage is unavailable.".to_string())?
+}
+#[tauri::command]
+async fn set_ai_credential(credential: String) -> Result<(), String> {
+    use credentials::CredentialStore;
+    tauri::async_runtime::spawn_blocking(move || {
+        credentials::Secret::new(credential)
+            .and_then(|secret| credentials::OsCredentials::default().save(secret))
+            .map_err(|_| "Could not save the API key in Windows Credential Manager.".into())
+    })
+    .await
+    .map_err(|_| "Credential storage is unavailable.".to_string())?
+}
+#[tauri::command]
+async fn delete_ai_credential() -> Result<(), String> {
+    use credentials::CredentialStore;
+    tauri::async_runtime::spawn_blocking(|| {
+        credentials::OsCredentials::default()
+            .remove()
+            .map_err(|_| "Could not remove the API key from Windows Credential Manager.".into())
+    })
+    .await
+    .map_err(|_| "Credential storage is unavailable.".to_string())?
+}
 pub mod window_context;
 
 pub use filename_sanitizer::{sanitize_stem, SanitizeError};
@@ -574,6 +610,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            has_ai_credential,
+            set_ai_credential,
+            delete_ai_credential,
             get_settings,
             preview_naming,
             update_settings,
