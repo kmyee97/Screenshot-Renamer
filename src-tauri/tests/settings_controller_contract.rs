@@ -19,6 +19,102 @@ impl WatchSession for Watch {
 }
 
 #[test]
+fn naming_save_preserves_in_flight_analysis_and_queued_screenshot() {
+    use screenshot_renamer_lib::{naming_templates::NamingPreset, FolderWatcher, SuppressedPaths};
+    use std::{sync::mpsc, time::Duration};
+    let dir = tempdir().unwrap();
+    let folder = dir.path().join("shots");
+    fs::create_dir(&folder).unwrap();
+    let mut controller = SettingsController::<FolderWatcher>::new(Ok(SettingsStore::new(
+        dir.path().join("settings.json"),
+    )));
+    let shared_rules = controller.naming_rules();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let (done_tx, done_rx) = mpsc::channel();
+    let initial = ApplicationSettings {
+        watched_folder: Some(folder.to_string_lossy().into()),
+        auto_rename: true,
+        ..Default::default()
+    };
+    controller
+        .apply(initial.clone(), |path, enabled, _| {
+            let first = AtomicBool::new(true);
+            FolderWatcher::start_controlled(
+                path.into(),
+                move |file| {
+                    let preset = shared_rules.lock().unwrap().preset;
+                    if first.swap(false, Ordering::SeqCst) {
+                        started_tx.send(()).unwrap();
+                        release_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(2))
+                            .unwrap();
+                    }
+                    done_tx
+                        .send((file.original_path().to_path_buf(), preset))
+                        .unwrap();
+                },
+                Arc::new(SuppressedPaths::default()),
+                enabled,
+                |_| {},
+            )
+            .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    fs::write(folder.join("first.png"), "image").unwrap();
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    fs::write(folder.join("queued.png"), "image").unwrap();
+    let mut changed = initial;
+    changed.naming.preset = NamingPreset::Minimal;
+    controller
+        .apply(changed, |_, _, _| Err("must retain pending work".into()))
+        .unwrap();
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        (folder.join("first.png"), NamingPreset::Descriptive)
+    );
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        (folder.join("queued.png"), NamingPreset::Minimal)
+    );
+}
+
+#[test]
+fn naming_only_save_keeps_the_live_watcher_and_pending_work() {
+    let dir = tempdir().unwrap();
+    let mut controller =
+        SettingsController::<Watch>::new(Ok(SettingsStore::new(dir.path().join("settings.json"))));
+    let stopped = Arc::new(AtomicBool::new(false));
+    let initial = ApplicationSettings {
+        watched_folder: Some(dir.path().to_string_lossy().into()),
+        auto_rename: true,
+        ..Default::default()
+    };
+    controller
+        .apply(initial.clone(), |_, _, _| Ok(Watch(stopped.clone())))
+        .unwrap();
+    let changed = ApplicationSettings {
+        naming: screenshot_renamer_lib::naming_engine::NamingRules {
+            preset: screenshot_renamer_lib::naming_templates::NamingPreset::Minimal,
+            ..Default::default()
+        },
+        ..initial
+    };
+    controller
+        .apply(changed.clone(), |_, _, _| {
+            Err("Naming-only saves must not replace the watcher".into())
+        })
+        .unwrap();
+    assert!(!stopped.load(Ordering::SeqCst));
+    assert_eq!(controller.snapshot().settings, changed);
+    assert!(controller.is_watching());
+}
+
+#[test]
 fn failed_replacement_keeps_the_working_folder_and_saved_preference() {
     let dir = tempdir().unwrap();
     let old = dir.path().join("old");

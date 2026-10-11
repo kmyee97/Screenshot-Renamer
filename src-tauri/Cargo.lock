@@ -3078,6 +3078,7 @@ dependencies = [
  "tempfile",
  "uuid",
  "windows",
+ "windows-future",
 ]
 
 [[package]]

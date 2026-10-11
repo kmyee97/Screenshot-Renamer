@@ -30,4 +30,6 @@ In Settings, choose Descriptive, Minimal, Coding, Work/Research, or Receipts/Ord
 
 Names use lowercase terms, conservative stop words, Windows sanitization, and a default 120 UTF-16-unit stem limit. The engine reserves space for the original extension and the rename service's collision suffix; it never replaces an existing destination. Raw OCR and cleaned text remain separate transient metadata and are not saved to rename history.
 
+Windows OCR operations share a three-second deadline and cancel stalled work before fallback naming. Watcher lifecycle commands run on a background thread. Saving naming preferences preserves in-flight analysis and queued screenshots: the current screenshot retains its starting rules, and subsequent screenshots use the saved rules.
+
 The OCR contracts include text PNG/JPEG and blank PNG fixtures. Generate these fixtures with Arial 44 pt text `SCREENSHOT ORDER 12345` on a 960×180 white canvas. Run native OCR and filesystem tests outside filesystem-isolating sandboxes, which can change Windows collision error codes. Windows native tests need an installed OCR language matching the user's profile.
