@@ -2,7 +2,9 @@ export type ApplicationSettings = { version: number; watchedFolder: string | nul
 export type WatcherEvent = { watcherStatus: "Watching" | "Paused" | "Error"; watcherError: string | null };
 export type SettingsSnapshot = WatcherEvent & { settings: ApplicationSettings; warning: string | null };
 export function errorMessage(error: unknown): string {
-  return typeof error === "string" ? error : error instanceof Error ? error.message : "The operation could not be completed.";
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+  return "The operation could not be completed.";
 }
 export interface RenameHistory {
   id: string;
@@ -14,3 +16,5 @@ export interface RenameHistory {
   outcome: { status: "pending" | "succeeded" | "failed"; details?: { message: string } };
   undoStatus: { status: "notAttempted" | "succeeded" | "failed"; details?: { at_ms: number; reason?: string } };
 }
+export interface HistoryItem extends RenameHistory { canUndo: boolean; undoReason: string | null }
+export interface RecentHistory { entries: HistoryItem[]; undoLast: RenameHistory | null }

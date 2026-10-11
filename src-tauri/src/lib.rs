@@ -9,6 +9,7 @@ pub mod filename_sanitizer;
 pub mod folder_watcher;
 pub mod history_pipeline;
 pub mod history_store;
+pub mod history_ui;
 pub mod rename_history;
 pub mod rename_recovery;
 pub mod rename_service;
@@ -279,6 +280,25 @@ fn startup_history(state: State<'_, HistoryState>) -> Vec<RenameHistoryView> {
 }
 
 #[tauri::command]
+async fn get_recent_history(
+    state: State<'_, HistoryState>,
+    limit: Option<usize>,
+) -> Result<history_ui::RecentHistory, String> {
+    let path = state.path()?;
+    let gate = Arc::clone(&state.undo_gate);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate
+            .lock()
+            .map_err(|_| "History is unavailable.".to_owned())?;
+        let store = HistoryStore::open(&path).map_err(|error| error.to_string())?;
+        history_ui::recent_history(&store, limit.unwrap_or(50).min(100))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn rename_and_record(
     app: AppHandle,
     state: State<'_, HistoryState>,
@@ -413,22 +433,28 @@ fn emit_rename_result(app: &AppHandle, result: &Result<RenameHistoryView, Rename
 
 #[tauri::command]
 async fn undo_history(
+    app: AppHandle,
     state: State<'_, HistoryState>,
     suppression: State<'_, SuppressionState>,
     id: String,
-) -> Result<RenameHistoryView, String> {
-    let path = state.path()?;
+) -> Result<RenameHistoryView, history_ui::UndoFailure> {
+    let path = state.path().map_err(history_ui::UndoFailure::unavailable)?;
     let gate = Arc::clone(&state.undo_gate);
     let suppressed = Arc::clone(&suppression.0);
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = gate
-            .lock()
-            .map_err(|_| "undo lock is unavailable".to_owned())?;
-        let store = HistoryStore::open(&path).map_err(|error| error.to_string())?;
-        undo_and_persist_suppressing(&id, &store, &suppressed).map_err(|error| error.to_string())
+    let event_id = id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock().map_err(|_| {
+            history_ui::UndoFailure::unavailable("Undo lock is unavailable.".into())
+        })?;
+        let store = HistoryStore::open(&path)
+            .map_err(|error| history_ui::UndoFailure::from(UndoError::HistoryRead(error)))?;
+        undo_and_persist_suppressing(&id, &store, &suppressed)
+            .map_err(history_ui::UndoFailure::from)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| history_ui::UndoFailure::unavailable(error.to_string()))?;
+    let _ = app.emit("screenshot-undo-result", event_id);
+    result
 }
 
 #[cfg(test)]
@@ -492,6 +518,7 @@ pub fn run() {
             stop_watching,
             startup_history,
             list_recent_history,
+            get_recent_history,
             rename_and_record,
             list_rename_failures,
             retry_rename,
