@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { errorMessage, type SettingsSnapshot } from "./types";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { errorMessage, type SettingsSnapshot, type WatcherEvent } from "./types";
 import { WatchedFolder } from "./components/WatchedFolder";
 import { WatcherControls } from "./components/WatcherControls";
 import { RecentRenames } from "./components/RecentRenames";
@@ -12,23 +13,55 @@ function App() {
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [choosing, setChoosing] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const watcherEvent = useRef<{ revision: number; value: WatcherEvent | null }>({ revision: 0, value: null });
+  function commitResponse(value: SettingsSnapshot, revision: number) {
+    const event = watcherEvent.current;
+    setSnapshot(event.revision > revision && event.value ? {
+      ...value, watcherStatus: event.value.watcherStatus, watcherError: event.value.watcherError,
+    } : value);
+  }
+  async function toggleAutoRename() {
+    if (!snapshot || choosing || toggling) return;
+    setToggling(true);
+    setSettingsError(null);
+    const revision = watcherEvent.current.revision;
+    try { commitResponse(await invoke<SettingsSnapshot>("set_auto_rename", { enabled: !snapshot.settings.autoRename }), revision); }
+    catch (error) { setSettingsError(errorMessage(error)); }
+    finally { setToggling(false); }
+  }
   async function chooseFolder() {
-    if (!snapshot || choosing) return;
+    if (!snapshot || choosing || toggling) return;
     setChoosing(true);
     setSettingsError(null);
     try {
       const selected = await open({ directory: true, multiple: false, title: "Choose screenshot folder", defaultPath: snapshot.settings.watchedFolder ?? undefined });
       if (selected !== null) {
-        setSnapshot(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, watchedFolder: selected } }));
+        const revision = watcherEvent.current.revision;
+        commitResponse(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, watchedFolder: selected } }), revision);
       }
     } catch (error) { setSettingsError(errorMessage(error)); }
     finally { setChoosing(false); }
   }
   useEffect(() => {
     let active = true;
-    invoke<SettingsSnapshot>("get_settings").then(value => { if (active) setSnapshot(value); })
-      .catch(error => { if (active) setSettingsError(errorMessage(error)); });
-    return () => { active = false; };
+    let unlisten: UnlistenFn | undefined;
+    let latestEvent: WatcherEvent | null = null;
+    async function initialize() {
+      try {
+        const release = await listen<WatcherEvent>("watcher-state-changed", event => {
+          watcherEvent.current = { revision: watcherEvent.current.revision + 1, value: event.payload };
+          latestEvent = event.payload;
+          if (active) setSnapshot(current => current ? { ...current, ...event.payload } : current);
+        });
+        if (!active) { release(); return; }
+        unlisten = release;
+        const value = await invoke<SettingsSnapshot>("get_settings");
+        if (active) setSnapshot({ ...value, ...(latestEvent ?? {}) });
+      } catch (error) { if (active) setSettingsError(errorMessage(error)); }
+    }
+    void initialize();
+    return () => { active = false; unlisten?.(); };
   }, []);
   return (
     <main className="app-shell">
@@ -38,8 +71,8 @@ function App() {
       </header>
       {settingsError ? <p role="alert" className="error">{settingsError}</p> : null}
       {snapshot?.warning ? <p role="status" className="muted">{snapshot.warning}</p> : null}
-      <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} onChoose={snapshot ? chooseFolder : undefined} pending={choosing} />
-      <WatcherControls />
+      <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} onChoose={snapshot ? chooseFolder : undefined} pending={choosing || toggling} />
+      <WatcherControls snapshot={snapshot} pending={choosing || toggling} onToggle={toggleAutoRename} />
       <RecentRenames />
       {settingsOpen ? <section className="panel" id="settings-panel" aria-labelledby="settings-heading">
         <div className="section-header"><h2 id="settings-heading">Settings</h2><button onClick={() => setSettingsOpen(false)}>Close settings</button></div>

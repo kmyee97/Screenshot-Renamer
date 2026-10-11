@@ -49,6 +49,18 @@ pub fn validate_folder(folder: &str) -> Result<PathBuf, String> {
 pub struct SettingsSnapshot {
     pub settings: ApplicationSettings,
     pub warning: Option<String>,
+    pub watcher_status: String,
+    pub watcher_error: Option<String>,
+}
+impl SettingsSnapshot {
+    pub fn new(settings: ApplicationSettings, warning: Option<String>) -> Self {
+        Self {
+            settings,
+            warning,
+            watcher_status: "Paused".into(),
+            watcher_error: None,
+        }
+    }
 }
 
 pub struct SettingsStore {
@@ -70,18 +82,21 @@ impl SettingsStore {
                 Ok(settings)
             });
         match result {
-            Ok(settings) => SettingsSnapshot {
-                settings,
-                warning: None,
-            },
-            Err(warning) => SettingsSnapshot {
-                settings: ApplicationSettings::default(),
-                warning: Some(warning),
-            },
+            Ok(settings) => SettingsSnapshot::new(settings, None),
+            Err(warning) => SettingsSnapshot::new(ApplicationSettings::default(), Some(warning)),
         }
     }
     pub fn save(&self, settings: &ApplicationSettings) -> Result<(), String> {
-        settings.validate()?;
+        self.save_preference(settings, false)
+    }
+    pub(crate) fn save_preference(
+        &self,
+        settings: &ApplicationSettings,
+        pausing: bool,
+    ) -> Result<(), String> {
+        if !pausing {
+            settings.validate()?;
+        }
         let parent = self
             .path
             .parent()
