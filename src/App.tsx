@@ -11,6 +11,7 @@ import { AnalysisFailures } from "./components/AnalysisFailures";
 import { NamingSettings } from "./components/NamingSettings";
 import { AiSettings } from "./components/AiSettings";
 import type { AiPreferences } from "./types";
+import type { DesktopPreferences } from "./types";
 import "./App.css";
 
 function App() {
@@ -67,6 +68,15 @@ function App() {
     try { commitResponse(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, ai } }), revision); }
     finally { setSavingNaming(false); }
   }
+  async function saveDesktop(desktop: DesktopPreferences) {
+    if (!snapshot || choosing || toggling || savingNaming) return;
+    setSavingNaming(true);
+    setSettingsError(null);
+    const revision=watcherEvent.current.revision;
+    try { commitResponse(await invoke<SettingsSnapshot>("update_settings", {settings:{...snapshot.settings,desktop}}), revision); }
+    catch(error) { setSettingsError(errorMessage(error)); }
+    finally { setSavingNaming(false); }
+  }
   useEffect(() => {
     let active = true;
     const releases: UnlistenFn[] = [];
@@ -119,6 +129,8 @@ function App() {
         <div className="section-header"><h2 id="settings-heading">Settings</h2><button onClick={() => setSettingsOpen(false)}>Close settings</button></div>
         <p>Folder: {snapshot?.settings.watchedFolder ?? "Not configured"}</p>
         <p>Auto Rename preference: {snapshot?.settings.autoRename ? "On" : "Off"}</p>
+        {snapshot ? <label className="toggle"><input type="checkbox" checked={snapshot.settings.desktop?.minimizeToTray ?? true} disabled={choosing || toggling || savingNaming} onChange={event=>void saveDesktop({ ...snapshot.settings.desktop, minimizeToTray:event.target.checked })} /> Minimize to tray</label> : null}
+        <p className="muted">Closing the window keeps active monitoring in the tray. Use tray Quit to exit.</p>
         {snapshot ? <NamingSettings value={snapshot.settings.naming} disabled={choosing || toggling || savingNaming} onSave={saveNaming} /> : null}
         {snapshot ? <AiSettings value={snapshot.settings.ai} disabled={choosing || toggling || savingNaming} onSave={saveAnalysis} /> : null}
         <p className="muted">Preferences are saved on this device.</p>

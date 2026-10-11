@@ -10,3 +10,5 @@ Ruling: execute the supplied Notion plans inline in this existing isolated workt
 
 - Discovery: all six remaining stories and Epic 6 are In Progress; all other Epics are Done. No local Windows Sandbox executable or Hyper-V commands detected yet. User authorized an available local Sandbox/VM if present.
 `n- Tray implementation: 131 Rust tests and 24 frontend tests passed; production build and rustfmt passed. Independent review corrected publication races and settings registration ordering. Isolated native QA build launches. Packaged tray action validation remains pending.
+
+- Minimize implementation: version 0.1.30; 134 Rust and 25 frontend tests passed, production build and rustfmt passed. Independent review corrected shutdown and deferred-hide races. Native QA configured a disposable folder, enabled Watching, minimized to a hidden window, and renamed a new PNG with its SHA-256 bytes unchanged. Packaged tray actions and clean-machine behavior remain in release acceptance.
