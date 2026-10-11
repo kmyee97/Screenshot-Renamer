@@ -10,6 +10,7 @@ pub mod folder_watcher;
 pub mod history_pipeline;
 pub mod history_store;
 pub mod history_ui;
+pub mod naming_engine;
 pub mod ocr_service;
 pub mod ocr_text_cleaner;
 pub mod rename_history;
@@ -169,13 +170,19 @@ fn process_automatic_screenshot(
     if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let candidate = file
-        .original_path()
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase()
-        .replace([' ', '_'], "-");
+    let candidate = match naming_engine::name(&metadata, &naming_engine::NamingRules::default()) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let _ = app.emit(
+                "screenshot-naming-failed",
+                format!(
+                    "{error} Screenshot remains at {}.",
+                    file.original_path().display()
+                ),
+            );
+            return;
+        }
+    };
     let store = history
         .path()
         .map_err(HistoryStoreError)
