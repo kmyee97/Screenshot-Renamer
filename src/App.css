@@ -26,3 +26,10 @@ p { line-height: 1.5; }
 @media (prefers-color-scheme: dark) { :root { color: #e7eefb; background: #141c2c; } .panel { background: #1e293d; border-color: #354561; } button { background: #26344b; color: #dfebff; border-color: #5a7192; } button:hover:not(:disabled) { background: #344967; } .status { background: #33415b; } .muted, .eyebrow { color: #b5c5de; } .error { color: #ffb2bc; } }
 .status-watching { color: #0a6249; background: #def5e9; }
 .status-error { color: #a52132; background: #fbe3e8; }
+.history-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rename-list { list-style: none; padding: 0; margin: 18px 0 0; max-height: 300px; overflow: auto; }
+.rename-list li { padding: 14px 0; border-top: 1px solid #b6c5dc; }
+.rename-names { display: flex; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; }
+.rename-names span, .rename-names strong { min-width: 0; max-width: 100%; }
+.rename-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #59677e; font-size: .8rem; margin-top: 8px; }
+@media (prefers-color-scheme: dark) { .rename-meta { color: #b5c5de; } }

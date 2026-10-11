@@ -210,7 +210,7 @@ impl HistoryState {
             .as_ref()
             .ok()
             .and_then(|path| HistoryStore::open(path).ok())
-            .and_then(|store| store.list_recent(50).ok())
+            .and_then(|store| store.list_recent_successful(50).ok())
             .unwrap_or_default()
             .into_iter()
             .map(|entry| entry.view())
@@ -265,7 +265,7 @@ async fn list_recent_history(
     tauri::async_runtime::spawn_blocking(move || {
         let store = HistoryStore::open(&path).map_err(|error| error.to_string())?;
         store
-            .list_recent(limit.unwrap_or(50).min(100))
+            .list_recent_successful(limit.unwrap_or(50).min(100))
             .map(|entries| entries.into_iter().map(|entry| entry.view()).collect())
             .map_err(|error| error.to_string())
     })

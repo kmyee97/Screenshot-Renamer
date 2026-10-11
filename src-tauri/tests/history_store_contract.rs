@@ -124,3 +124,32 @@ fn storage_write_failure_reports_real_location_without_losing_file() {
     assert!(!original.exists());
     assert_eq!(fs::read(destination).unwrap(), b"image bytes");
 }
+
+#[test]
+fn recent_successes_skip_failures_before_applying_the_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("history.sqlite");
+    let store = HistoryStore::open(&path).unwrap();
+    for time in 1..=102 {
+        store
+            .append(&successful_entry(&format!("success-{time}"), time))
+            .unwrap();
+    }
+    for time in 103..=205 {
+        let mut failed = RenameHistoryEntry::new(
+            PathBuf::from("failed.png"),
+            UNIX_EPOCH + Duration::from_millis(time),
+        )
+        .unwrap();
+        failed.mark_rename_failed(None, "failed".into()).unwrap();
+        store.append(&failed).unwrap();
+    }
+    drop(store);
+    let reopened = HistoryStore::open(&path).unwrap();
+    let recent = reopened.list_recent_successful(2).unwrap();
+    assert_eq!(recent.len(), 2);
+    assert!(recent[0].original_path().ends_with("success-102.png"));
+    assert!(recent[1].original_path().ends_with("success-101.png"));
+    assert_eq!(reopened.list_recent_successful(1000).unwrap().len(), 100);
+    assert!(reopened.list_recent_successful(0).unwrap().is_empty());
+}

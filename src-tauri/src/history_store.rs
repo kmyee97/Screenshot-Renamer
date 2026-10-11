@@ -78,6 +78,35 @@ impl HistoryStore {
     pub fn list_recent(&self, limit: usize) -> Result<Vec<RenameHistoryEntry>, HistoryStoreError> {
         <Self as HistoryRepository>::list_recent(self, limit)
     }
+    /// Select successes before applying the display limit, including undone entries.
+    pub fn list_recent_successful(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RenameHistoryEntry>, HistoryStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT payload FROM entries ORDER BY attempted_at_ms DESC, id DESC")
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?;
+        let mut entries = Vec::new();
+        for row in rows {
+            let payload = row.map_err(sql_error)?;
+            if let Ok(entry) = serde_json::from_str::<RenameHistoryEntry>(&payload) {
+                if entry.outcome() == &RenameOutcome::Succeeded {
+                    entries.push(entry);
+                    if entries.len() >= limit.min(100) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(entries)
+    }
 }
 
 impl HistoryRepository for HistoryStore {
