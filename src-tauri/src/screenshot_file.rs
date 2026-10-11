@@ -11,6 +11,7 @@ pub struct ScreenshotFile {
     extension: Option<OsString>,
     created_at: Option<SystemTime>,
     state: ProcessingState,
+    window_context: Option<crate::screenshot_metadata::WindowContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,11 +78,23 @@ impl ScreenshotFile {
             extension,
             created_at,
             state: ProcessingState::Detected,
+            window_context: None,
         })
     }
 
     pub fn original_path(&self) -> &Path {
         &self.original_path
+    }
+
+    pub fn with_window_context(
+        mut self,
+        context: Option<crate::screenshot_metadata::WindowContext>,
+    ) -> Self {
+        self.window_context = context;
+        self
+    }
+    pub fn window_context(&self) -> Option<&crate::screenshot_metadata::WindowContext> {
+        self.window_context.as_ref()
     }
 
     pub fn filename(&self) -> &OsStr {

@@ -59,7 +59,7 @@ impl ScreenshotMetadata {
             raw_ocr_text: None,
             cleaned_ocr_text: None,
             ocr_status: OcrStatus::NotAttempted,
-            window_context: None,
+            window_context: file.window_context().cloned(),
             visual_context: None,
         }
     }

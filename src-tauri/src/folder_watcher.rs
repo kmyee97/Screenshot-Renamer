@@ -270,17 +270,27 @@ impl FolderWatcher {
         let receive_enabled = enabled.clone();
         let on_error = Arc::new(on_error);
         let receive_error = on_error.clone();
-        let mut watcher = notify::recommended_watcher(move |event| {
-            if !receive_enabled.load(Ordering::SeqCst) {
-                return;
-            }
-            if let Err(mpsc::TrySendError::Full(_)) = event_sender.try_send(event) {
-                receive_error(
-                    "Screenshot watcher queue is full. Pause and resume to retry.".into(),
-                );
-            }
-        })
-        .map_err(|error| FolderWatcherError::Watcher(error.to_string()))?;
+        let mut watcher =
+            notify::recommended_watcher(move |event: Result<Event, notify::Error>| {
+                if !receive_enabled.load(Ordering::SeqCst) {
+                    return;
+                }
+                // Capture near detection, before queued readiness/OCR work changes foreground context.
+                let context = event
+                    .as_ref()
+                    .ok()
+                    .filter(|e| {
+                        matches!(e.kind, EventKind::Create(_))
+                            && e.paths.iter().any(|p| is_supported_image_file(p))
+                    })
+                    .and_then(|_| crate::window_context::capture());
+                if let Err(mpsc::TrySendError::Full(_)) = event_sender.try_send((event, context)) {
+                    receive_error(
+                        "Screenshot watcher queue is full. Pause and resume to retry.".into(),
+                    );
+                }
+            })
+            .map_err(|error| FolderWatcherError::Watcher(error.to_string()))?;
         watcher
             .watch(&directory, RecursiveMode::NonRecursive)
             .map_err(|error| FolderWatcherError::Watcher(error.to_string()))?;
@@ -322,7 +332,10 @@ impl FolderWatcher {
 
 fn run_worker<F>(
     _watcher: RecommendedWatcher,
-    event_receiver: Receiver<Result<Event, notify::Error>>,
+    event_receiver: Receiver<(
+        Result<Event, notify::Error>,
+        Option<crate::screenshot_metadata::WindowContext>,
+    )>,
     stop_receiver: Receiver<()>,
     on_file: F,
     suppressed_paths: Arc<SuppressedPaths>,
@@ -345,7 +358,7 @@ fn run_worker<F>(
         }
 
         match event_receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(Ok(event)) => {
+            Ok((Ok(event), context)) => {
                 if !enabled.load(Ordering::SeqCst) {
                     continue;
                 }
@@ -353,7 +366,7 @@ fn run_worker<F>(
                     Ok(files) => {
                         for file in files {
                             if enabled.load(Ordering::SeqCst) {
-                                on_file(file);
+                                on_file(file.with_window_context(context.clone()));
                             }
                         }
                     }
@@ -363,7 +376,7 @@ fn run_worker<F>(
                     }
                 }
             }
-            Ok(Err(error)) => {
+            Ok((Err(error), _)) => {
                 on_error(error.to_string());
                 break;
             }
