@@ -32,4 +32,5 @@ p { line-height: 1.5; }
 .rename-names { display: flex; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; }
 .rename-names span, .rename-names strong { min-width: 0; max-width: 100%; }
 .rename-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #59677e; font-size: .8rem; margin-top: 8px; }
+.row-undo { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 @media (prefers-color-scheme: dark) { .rename-meta { color: #b5c5de; } }

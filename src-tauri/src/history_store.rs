@@ -107,6 +107,30 @@ impl HistoryStore {
         }
         Ok(entries)
     }
+    pub fn find_latest_successful<F>(
+        &self,
+        mut eligible: F,
+    ) -> Result<Option<RenameHistoryEntry>, HistoryStoreError>
+    where
+        F: FnMut(&RenameHistoryEntry) -> bool,
+    {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT payload FROM entries ORDER BY attempted_at_ms DESC, id DESC")
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?;
+        for row in rows {
+            if let Ok(entry) = serde_json::from_str::<RenameHistoryEntry>(&row.map_err(sql_error)?)
+            {
+                if entry.outcome() == &RenameOutcome::Succeeded && eligible(&entry) {
+                    return Ok(Some(entry));
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 impl HistoryRepository for HistoryStore {
