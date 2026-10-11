@@ -7,6 +7,7 @@ import { WatchedFolder } from "./components/WatchedFolder";
 import { WatcherControls } from "./components/WatcherControls";
 import { RecentRenames } from "./components/RecentRenames";
 import { PipelineNotice } from "./components/PipelineNotice";
+import { AnalysisFailures } from "./components/AnalysisFailures";
 import { NamingSettings } from "./components/NamingSettings";
 import { AiSettings } from "./components/AiSettings";
 import type { AiPreferences } from "./types";
@@ -94,6 +95,7 @@ function App() {
       <WatcherControls snapshot={snapshot} pending={choosing || toggling || savingNaming} onToggle={toggleAutoRename} />
       <RecentRenames />
       <PipelineNotice />
+      <AnalysisFailures />
       <p className="muted">Analysis mode: {snapshot?.settings.ai?.mode ?? "local"}{snapshot?.settings.ai?.mode && snapshot.settings.ai.mode !== "local" ? " · OpenAI may receive screenshot images" : " · On this device"}</p>
       {settingsOpen ? <section className="panel" id="settings-panel" aria-labelledby="settings-heading">
         <div className="section-header"><h2 id="settings-heading">Settings</h2><button onClick={() => setSettingsOpen(false)}>Close settings</button></div>

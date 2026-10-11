@@ -16,6 +16,7 @@ pub mod naming_engine;
 pub mod naming_templates;
 pub mod ocr_service;
 pub mod ocr_text_cleaner;
+pub mod processing_mode;
 pub mod rename_history;
 pub mod rename_recovery;
 pub mod rename_service;
@@ -125,7 +126,7 @@ async fn update_settings(
         let mut controller = shared_controller
             .lock()
             .map_err(|_| "Settings are unavailable.")?;
-        let rules = controller.naming_rules();
+        let rules = controller.processing_settings();
         let result = controller.apply(settings, |folder, enabled, error| {
             prepare_watcher(&app, folder, enabled, error, suppression, rules)
         });
@@ -151,7 +152,7 @@ async fn set_auto_rename(
             .map_err(|_| "Settings are unavailable.")?;
         let mut settings = controller.snapshot().settings;
         settings.auto_rename = enabled;
-        let rules = controller.naming_rules();
+        let rules = controller.processing_settings();
         let result = controller.apply(settings, |folder, enabled, error| {
             prepare_watcher(&app, folder, enabled, error, suppression, rules)
         });
@@ -168,7 +169,7 @@ fn prepare_watcher(
     enabled: Arc<std::sync::atomic::AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     suppression: Arc<SuppressedPaths>,
-    rules: Arc<Mutex<naming_engine::NamingRules>>,
+    rules: Arc<Mutex<settings::ApplicationSettings>>,
 ) -> Result<FolderWatcher, String> {
     let file_app = app.clone();
     let error_app = app.clone();
@@ -183,12 +184,13 @@ fn prepare_watcher(
                     "screenshot-detected",
                     file.original_path().to_string_lossy().into_owned(),
                 );
-                process_automatic_screenshot(
+                let _ = process_automatic_screenshot(
                     &file_app,
                     file,
                     &processing_enabled,
                     &retained_suppression,
                     &rules,
+                    None,
                 );
             }
         },
@@ -211,54 +213,117 @@ fn prepare_watcher(
 fn process_automatic_screenshot(
     app: &AppHandle,
     file: ScreenshotFile,
-    enabled: &std::sync::atomic::AtomicBool,
+    enabled: &Arc<std::sync::atomic::AtomicBool>,
     suppression: &SuppressedPaths,
-    rules: &Mutex<naming_engine::NamingRules>,
-) {
-    // This callback runs on the folder watcher's worker after file readiness.
-    let rules = rules
+    preferences: &Arc<Mutex<settings::ApplicationSettings>>,
+    retry: Option<processing_mode::PendingAnalysis>,
+) -> Result<RenameHistoryView, String> {
+    let settings = preferences
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .map_err(|_| "Settings unavailable.")?
         .clone();
-    let mut metadata = screenshot_metadata::ScreenshotMetadata::from_file(&file);
-    let analysis = ocr_service::analyze(file.original_path());
-    if let Err(error) = &analysis {
-        let _ = app.emit(
-            "screenshot-analysis-warning",
-            format!("{error} The screenshot will use fallback naming."),
-        );
+    if let Some(pending) = &retry {
+        pending.verify()?;
     }
-    ocr_service::enrich_metadata(&mut metadata, analysis);
-    let history = app.state::<HistoryState>();
-    let Ok(_gate) = history.undo_gate.lock() else {
-        return;
+    let live_settings = preferences.clone();
+    let starting_ai = settings.ai.clone();
+    let live_enabled = enabled.clone();
+    let live = move || {
+        live_enabled.load(std::sync::atomic::Ordering::SeqCst)
+            && live_settings
+                .lock()
+                .map(|settings| settings.ai == starting_ai && settings.ai.authorize_cloud().is_ok())
+                .unwrap_or(false)
     };
-    if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    let candidate = match naming_engine::name(&metadata, &rules) {
-        Ok(candidate) => candidate,
+    let authorized: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(live);
+    let mut uploaded_digest = None;
+    let analysis = processing_mode::route(
+        &file,
+        &settings.ai,
+        &settings.naming,
+        |metadata| {
+            let result = ocr_service::analyze(file.original_path());
+            let warning = result
+                .as_ref()
+                .err()
+                .map(|error| format!("{error} Using local fallback naming."));
+            ocr_service::enrich_metadata(metadata, result);
+            warning
+        },
+        |metadata| {
+            use credentials::CredentialStore;
+            if !enabled.load(std::sync::atomic::Ordering::SeqCst) || !authorized() {
+                return Err(vision_provider::VisionError::Configuration);
+            }
+            let credentials = Arc::new(credentials::OsCredentials::default());
+            drop(credentials.load()?);
+            let bytes = processing_mode::read_image(&file)?;
+            uploaded_digest = Some(processing_mode::fingerprint(&bytes));
+            let request = vision_provider::VisionRequest::new(
+                bytes,
+                metadata.cleaned_ocr_text.as_deref().unwrap_or(""),
+            )?;
+            let registry = vision_providers::configured_registry(
+                settings.ai.clone(),
+                credentials,
+                authorized,
+            )?;
+            if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(vision_provider::VisionError::Configuration);
+            }
+            registry.analyze(settings.ai.provider, &request)
+        },
+    );
+    let analysis = match analysis {
+        Ok(analysis) => analysis,
         Err(error) => {
-            let _ = app.emit(
-                "screenshot-naming-failed",
-                format!(
-                    "{error} Screenshot remains at {}.",
-                    file.original_path().display()
-                ),
-            );
-            return;
+            if let processing_mode::ProcessingError::Vision(kind) = &error {
+                let state = app.state::<AnalysisState>();
+                let mut recovery = state
+                    .0
+                    .lock()
+                    .map_err(|_| "Analysis recovery unavailable.")?;
+                recovery.record(file, *kind, retry, uploaded_digest);
+                let _ = app.emit("analysis-failures-changed", recovery.failures());
+            } else {
+                let _ = app.emit("screenshot-naming-failed", error.to_string());
+            }
+            return Err(error.to_string());
         }
     };
+    if let Some(warning) = &analysis.warning {
+        let _ = app.emit("screenshot-analysis-warning", warning);
+    }
+    let history = app.state::<HistoryState>();
+    let _gate = history
+        .undo_gate
+        .lock()
+        .map_err(|_| "History unavailable.")?;
+    if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Processing was paused.".into());
+    }
+    if let Some(pending) = &retry {
+        pending.verify()?;
+    }
+    if let Some(digest) = uploaded_digest {
+        if processing_mode::fingerprint(
+            &processing_mode::read_image(&file).map_err(|e| e.to_string())?,
+        ) != digest
+        {
+            return Err("Screenshot changed during analysis; it has not been renamed.".into());
+        }
+    }
     let store = history
         .path()
         .map_err(HistoryStoreError)
         .and_then(|path| HistoryStore::open(&path));
-    let Ok(mut recovery) = history.recovery.lock() else {
-        return;
-    };
+    let mut recovery = history
+        .recovery
+        .lock()
+        .map_err(|_| "Rename recovery unavailable.")?;
     let result = recovery.rename(
         file,
-        &candidate,
+        &analysis.candidate,
         store
             .as_ref()
             .map_err(|error| HistoryStoreError(error.to_string())),
@@ -269,8 +334,62 @@ fn process_automatic_screenshot(
         }
     }
     emit_rename_result(app, &result);
+    if result.is_ok() {
+        let _ = app.emit(
+            "screenshot-analysis-completed",
+            analysis.completion_message(),
+        );
+    }
+    result.map_err(|failure| failure.message)
 }
 
+#[derive(Default)]
+pub struct AnalysisState(Mutex<processing_mode::AnalysisRecovery>);
+#[tauri::command]
+fn list_analysis_failures(
+    state: State<'_, AnalysisState>,
+) -> Result<Vec<processing_mode::AnalysisFailure>, String> {
+    state
+        .0
+        .lock()
+        .map(|recovery| recovery.failures())
+        .map_err(|_| "Analysis recovery unavailable.".into())
+}
+#[tauri::command]
+async fn retry_analysis(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    id: String,
+) -> Result<RenameHistoryView, String> {
+    let preferences = state
+        .controller
+        .lock()
+        .map_err(|_| "Settings unavailable.")?
+        .processing_settings();
+    tauri::async_runtime::spawn_blocking(move || {
+        let pending = {
+            let state = app.state::<AnalysisState>();
+            let mut recovery = state
+                .0
+                .lock()
+                .map_err(|_| "Analysis recovery unavailable.")?;
+            let result = recovery.reserve(&id);
+            let _ = app.emit("analysis-failures-changed", recovery.failures());
+            result?
+        };
+        let file = pending.file.clone();
+        process_automatic_screenshot(
+            &app,
+            file,
+            &Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            &app.state::<SuppressionState>().0,
+            &preferences,
+            Some(pending),
+        )
+    })
+    .await
+    .map_err(|_| "Analysis retry failed.".to_string())?
+}
 pub struct SuppressionState(Arc<SuppressedPaths>);
 
 impl Default for SuppressionState {
@@ -586,6 +705,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(SuppressionState::default())
+        .manage(AnalysisState::default())
         .setup(|app| {
             app.manage(HistoryState::from_app(&app.handle()));
             let settings = SettingsState::from_app(&app.handle());
@@ -594,7 +714,7 @@ pub fn run() {
                     .controller
                     .lock()
                     .map_err(|_| "Settings unavailable")?;
-                let rules = controller.naming_rules();
+                let rules = controller.processing_settings();
                 controller.restore(|folder, enabled, error| {
                     prepare_watcher(
                         &app.handle(),
@@ -626,6 +746,8 @@ pub fn run() {
             rename_and_record,
             list_rename_failures,
             retry_rename,
+            list_analysis_failures,
+            retry_analysis,
             undo_history
         ])
         .run(tauri::generate_context!())
