@@ -22,6 +22,7 @@ pub mod screenshot_metadata;
 pub mod settings;
 pub mod settings_controller;
 pub mod undo_service;
+pub mod vision_provider;
 pub mod window_context;
 
 pub use filename_sanitizer::{sanitize_stem, SanitizeError};

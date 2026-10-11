@@ -1,0 +1,16 @@
+# Epic 5 execution record
+
+Source: Screenshot Renamer Notion backlog, four In Progress stories and their implementation plans, fetched 2026-10-11.
+
+Order: vision contract → AI settings/credentials → OpenAI adapter → processing modes.
+Each story receives its own branch, patch version, tests and merge to main.
+
+Design: provider-independent bounded requests/results; explicit saved cloud consent; OS credential storage; a fixed HTTPS OpenAI Responses endpoint; Local never reads an image for upload; Hybrid escalates only when local signals cannot produce a useful name; AI failures retain the source and support retry. All successes use the existing naming/rename/history pipeline.
+
+Pre-flight: settings produce mode/consent consumed by adapter/routing; the contract produces validated metadata consumed by naming. Existing naming already supports visual topic/detail. No naming API change is needed.
+
+Ruling: use the implementation plans already supplied in the selected Notion stories as the authorized design and plan, rather than introduce new approval stages.
+
+Baseline: Rust suite passed. Frontend dependency installation required before baseline execution.
+
+Task 1 verified: four contract tests passed after RED/GREEN; full Rust baseline and frontend 18 tests/build passed outside filesystem isolation. Review regression preserves window title. Version 0.1.25.
