@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { errorMessage, type SettingsSnapshot } from "./types";
 import { WatchedFolder } from "./components/WatchedFolder";
 import { WatcherControls } from "./components/WatcherControls";
@@ -10,6 +11,19 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  async function chooseFolder() {
+    if (!snapshot || choosing) return;
+    setChoosing(true);
+    setSettingsError(null);
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "Choose screenshot folder", defaultPath: snapshot.settings.watchedFolder ?? undefined });
+      if (selected !== null) {
+        setSnapshot(await invoke<SettingsSnapshot>("update_settings", { settings: { ...snapshot.settings, watchedFolder: selected } }));
+      }
+    } catch (error) { setSettingsError(errorMessage(error)); }
+    finally { setChoosing(false); }
+  }
   useEffect(() => {
     let active = true;
     invoke<SettingsSnapshot>("get_settings").then(value => { if (active) setSnapshot(value); })
@@ -24,7 +38,7 @@ function App() {
       </header>
       {settingsError ? <p role="alert" className="error">{settingsError}</p> : null}
       {snapshot?.warning ? <p role="status" className="muted">{snapshot.warning}</p> : null}
-      <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} />
+      <WatchedFolder folder={snapshot?.settings.watchedFolder ?? null} onChoose={snapshot ? chooseFolder : undefined} pending={choosing} />
       <WatcherControls />
       <RecentRenames />
       {settingsOpen ? <section className="panel" id="settings-panel" aria-labelledby="settings-heading">
