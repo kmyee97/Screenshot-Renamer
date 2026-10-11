@@ -22,3 +22,5 @@ Task 1 verified: four contract tests passed after RED/GREEN; full Rust baseline 
 Task 2 verified: full Rust suite passed with -j 1; frontend 20 tests and production build passed. Native isolated Credential Manager lifecycle and missing-entry regression passed. Version 0.1.26.
 
 Task 3 code verified: full native Rust suite passed with -j 1, including mocked HTTP scenarios, loopback transport bounds/redirect tests, stalled-body timeout regression, and consent-revocation retry test. Opt-in live fixture check remains pending test credential. Version 0.1.27. Windows native TLS uses the OS certificate store.
+
+Task 3 live verified: user-authorized synthetic PNG check passed on Windows using the saved OS credential after account funding. Initial timeout prompted a bounded 15-second attempt/30-second total budget; an unfunded-account rate limit was reported safely. No watched screenshot was uploaded.

@@ -140,7 +140,7 @@ impl VisionProvider for OpenAiProvider {
             return Err(VisionError::Configuration);
         }
         let body = request_body(&self.settings.model, request);
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(30);
         for attempt in 0..2 {
             if !(self.authorized)() {
                 return Err(VisionError::Configuration);
@@ -153,7 +153,7 @@ impl VisionProvider for OpenAiProvider {
             }
             let result = self
                 .http
-                .post(&body, &credential, remaining.min(Duration::from_secs(4)))
+                .post(&body, &credential, remaining.min(Duration::from_secs(15)))
                 .and_then(parse_response);
             drop(credential);
             match result {
