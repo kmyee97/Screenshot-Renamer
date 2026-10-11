@@ -10,6 +10,7 @@ pub mod folder_watcher;
 pub mod history_pipeline;
 pub mod history_store;
 pub mod history_ui;
+pub mod ocr_service;
 pub mod ocr_text_cleaner;
 pub mod rename_history;
 pub mod rename_recovery;
@@ -150,6 +151,16 @@ fn process_automatic_screenshot(
     enabled: &std::sync::atomic::AtomicBool,
     suppression: &SuppressedPaths,
 ) {
+    // This callback runs on the folder watcher's worker after file readiness.
+    let mut metadata = screenshot_metadata::ScreenshotMetadata::from_file(&file);
+    let analysis = ocr_service::analyze(file.original_path());
+    if let Err(error) = &analysis {
+        let _ = app.emit(
+            "screenshot-analysis-warning",
+            format!("{error} The screenshot will use fallback naming."),
+        );
+    }
+    ocr_service::enrich_metadata(&mut metadata, analysis);
     let history = app.state::<HistoryState>();
     let Ok(_gate) = history.undo_gate.lock() else {
         return;
