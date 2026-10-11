@@ -14,6 +14,7 @@ pub mod rename_recovery;
 pub mod rename_service;
 pub mod screenshot_file;
 pub mod settings;
+pub mod settings_controller;
 pub mod undo_service;
 
 pub use filename_sanitizer::{sanitize_stem, SanitizeError};
@@ -39,8 +40,7 @@ pub use undo_service::{undo_and_persist, undo_and_persist_suppressing, undo_rena
 pub struct WatcherState(Mutex<Option<FolderWatcher>>);
 
 pub struct SettingsState {
-    store: Result<settings::SettingsStore, String>,
-    snapshot: Mutex<settings::SettingsSnapshot>,
+    controller: Mutex<settings_controller::SettingsController<FolderWatcher>>,
 }
 impl SettingsState {
     fn from_app(app: &AppHandle) -> Self {
@@ -49,46 +49,55 @@ impl SettingsState {
             .app_config_dir()
             .map(|directory| settings::SettingsStore::new(directory.join("settings.json")))
             .map_err(|error| error.to_string());
-        let snapshot = match &store {
-            Ok(store) => store.load(),
-            Err(error) => settings::SettingsSnapshot {
-                settings: Default::default(),
-                warning: Some(error.clone()),
-            },
-        };
         Self {
-            store,
-            snapshot: Mutex::new(snapshot),
+            controller: Mutex::new(settings_controller::SettingsController::new(store)),
         }
     }
 }
 #[tauri::command]
 fn get_settings(state: State<'_, SettingsState>) -> Result<settings::SettingsSnapshot, String> {
     state
-        .snapshot
+        .controller
         .lock()
-        .map(|snapshot| snapshot.clone())
+        .map(|controller| controller.snapshot())
         .map_err(|_| "Settings are unavailable.".into())
 }
 #[tauri::command]
 fn update_settings(
+    app: AppHandle,
     state: State<'_, SettingsState>,
+    suppression: State<'_, SuppressionState>,
     settings: settings::ApplicationSettings,
 ) -> Result<settings::SettingsSnapshot, String> {
-    let mut snapshot = state
-        .snapshot
+    let mut controller = state
+        .controller
         .lock()
         .map_err(|_| "Settings are unavailable.")?;
-    state
-        .store
-        .as_ref()
-        .map_err(Clone::clone)?
-        .save(&settings)?;
-    *snapshot = settings::SettingsSnapshot {
-        settings,
-        warning: None,
-    };
-    Ok(snapshot.clone())
+    controller.apply(settings, |folder, enabled| {
+        prepare_watcher(&app, folder, enabled, Arc::clone(&suppression.0))
+    })
+}
+
+fn prepare_watcher(
+    app: &AppHandle,
+    folder: &str,
+    enabled: Arc<std::sync::atomic::AtomicBool>,
+    suppression: Arc<SuppressedPaths>,
+) -> Result<FolderWatcher, String> {
+    let app = app.clone();
+    FolderWatcher::start_with_suppression(
+        settings::validate_folder(folder)?,
+        move |file| {
+            if enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = app.emit(
+                    "screenshot-detected",
+                    file.original_path().to_string_lossy().into_owned(),
+                );
+            }
+        },
+        suppression,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub struct SuppressionState(Arc<SuppressedPaths>);
@@ -390,10 +399,24 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(WatcherState::default())
         .manage(SuppressionState::default())
         .setup(|app| {
-            app.manage(SettingsState::from_app(&app.handle()));
+            let settings = SettingsState::from_app(&app.handle());
+            settings
+                .controller
+                .lock()
+                .map_err(|_| "Settings unavailable")?
+                .restore(|folder, enabled| {
+                    prepare_watcher(
+                        &app.handle(),
+                        folder,
+                        enabled,
+                        Arc::clone(&app.state::<SuppressionState>().0),
+                    )
+                });
+            app.manage(settings);
             let state = HistoryState::from_app(&app.handle());
             app.manage(state);
             Ok(())
