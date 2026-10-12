@@ -1,6 +1,6 @@
 [package]
 name = "screenshot-renamer"
-version = "0.1.31"
+version = "0.1.32"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -22,6 +22,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "8"

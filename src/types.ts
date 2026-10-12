@@ -3,7 +3,8 @@ export type NamingRules = { preset: NamingPreset; template: string | null; maxSt
 export type ProcessingMode = "local" | "ai" | "hybrid";
 export type AiPreferences = { mode: ProcessingMode; enabled: boolean; cloudConsent: boolean; provider: "openAi"; model: string };
 export type DesktopPreferences = { minimizeToTray: boolean; startWithWindows?: boolean };
-export type ApplicationSettings = { version: number; watchedFolder: string | null; autoRename: boolean; naming?: NamingRules; ai?: AiPreferences; desktop?: DesktopPreferences };
+export type NotificationPreferences = {errors:boolean;successes:boolean};
+export type ApplicationSettings = { version: number; watchedFolder: string | null; autoRename: boolean; naming?: NamingRules; ai?: AiPreferences; desktop?: DesktopPreferences;notifications?:NotificationPreferences };
 export type WatcherEvent = { watcherStatus: "Watching" | "Paused" | "Error"; watcherError: string | null; revision?: number; settings?: ApplicationSettings; warning?: string | null };
 export type SettingsSnapshot = WatcherEvent & { settings: ApplicationSettings; warning: string | null };
 export function errorMessage(error: unknown): string {

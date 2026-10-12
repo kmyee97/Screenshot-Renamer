@@ -17,6 +17,8 @@ pub struct ApplicationSettings {
     pub ai: crate::ai_settings::AiSettings,
     #[serde(default)]
     pub desktop: crate::desktop::DesktopPreferences,
+    #[serde(default)]
+    pub notifications: crate::notifications::NotificationPreferences,
 }
 impl Default for ApplicationSettings {
     fn default() -> Self {
@@ -27,6 +29,7 @@ impl Default for ApplicationSettings {
             naming: Default::default(),
             ai: Default::default(),
             desktop: Default::default(),
+            notifications: Default::default(),
         }
     }
 }
