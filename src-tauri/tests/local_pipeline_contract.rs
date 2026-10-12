@@ -13,6 +13,61 @@ use std::{
 
 #[cfg(windows)]
 #[test]
+fn screenshot_save_finishes_before_ocr_and_rename_and_image_stays_readable() {
+    use std::{fs::File, io::Write};
+    let dir = tempfile::tempdir().unwrap();
+    let suppressed = Arc::new(SuppressedPaths::default());
+    let callback_suppression = suppressed.clone();
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = FolderWatcher::start_with_suppression(
+        screenshot_renamer_lib::settings::validate_folder(dir.path().to_str().unwrap()).unwrap(),
+        move |file| {
+            // Snipping Tool can still be foregrounded during the save.
+            let mut file = file.with_window_context(None);
+            let mut metadata = ScreenshotMetadata::from_file(&file);
+            enrich_metadata(&mut metadata, analyze(file.original_path()));
+            let stem = name(&metadata, &NamingRules::default()).unwrap();
+            let result = rename_screenshot(&mut file, &stem).unwrap();
+            callback_suppression.suppress(&result);
+            tx.send(result).unwrap();
+        },
+        suppressed,
+    )
+    .unwrap();
+    let source = dir.path().join("Screenshot.png");
+    let bytes = include_bytes!("fixtures/vscode-welcome.png");
+    let mut writer = File::create(&source).unwrap();
+    // The create notification arrives before the capture app writes any bytes.
+    let early = rx.recv_timeout(Duration::from_millis(250));
+    writer.write_all(bytes).unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    let destination = match early {
+        Ok(path) => path,
+        Err(_) => rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+    };
+    watcher.stop().unwrap();
+    let renamed_bytes = std::fs::read(&destination).unwrap();
+    assert!(
+        renamed_bytes.as_slice() == bytes,
+        "renamed image bytes changed ({} bytes)",
+        renamed_bytes.len()
+    );
+    // Windows must still decode the renamed image and recognize its content.
+    let screenshot_renamer_lib::ocr_service::OcrResult::Text(text) = analyze(&destination).unwrap()
+    else {
+        panic!("renamed screenshot has no readable text")
+    };
+    assert!(text.contains("Visual Studio Code"), "{text}");
+    assert!(!destination
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("screenshot-"));
+}
+
+#[cfg(windows)]
+#[test]
 fn canonical_watched_folder_names_google_snippet_from_its_content() {
     use screenshot_renamer_lib::{screenshot_metadata::WindowContext, ScreenshotFile};
     let dir = tempfile::tempdir().unwrap();

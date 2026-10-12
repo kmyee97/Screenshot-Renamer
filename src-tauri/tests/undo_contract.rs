@@ -13,6 +13,19 @@ fn renamed_entry(original: PathBuf, renamed: PathBuf) -> RenameHistoryEntry {
 }
 
 #[test]
+fn undo_can_restore_the_name_of_an_empty_file_from_existing_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let original = directory.path().join("Screenshot.png");
+    let renamed = directory.path().join("screenshot-1791844092924.png");
+    fs::write(&renamed, b"").unwrap();
+    let mut entry = renamed_entry(original.clone(), renamed.clone());
+    assert_eq!(undo_rename(&mut entry).unwrap(), original);
+    assert_eq!(fs::metadata(original).unwrap().len(), 0);
+    assert!(!renamed.exists());
+    assert!(matches!(entry.undo_status(), UndoStatus::Succeeded { .. }));
+}
+
+#[test]
 fn undo_restores_original_name_and_bytes() {
     let directory = tempfile::tempdir().unwrap();
     let original = directory.path().join("Screenshot.png");

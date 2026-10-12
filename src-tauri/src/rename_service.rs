@@ -200,6 +200,20 @@ where
             reason: "the source is not a regular file".to_owned(),
         });
     }
+    if metadata.len() == 0 {
+        return Err(RenameError::SourceNotFile {
+            path: source.to_path_buf(),
+            reason: "the screenshot is empty or has not finished saving".into(),
+        });
+    }
+    // Acquire before selecting/moving the destination, and keep the source
+    // nonempty and protected even if another writer tries to reopen it.
+    let _source_guard = crate::file_access::open_saved_screenshot(source).map_err(|error| {
+        RenameError::SourceNotFile {
+            path: source.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })?;
 
     let parent = source.parent().unwrap_or_else(|| Path::new(""));
     let mut suffix = None;
@@ -284,6 +298,8 @@ unsafe extern "system" {
 pub(crate) fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
+    // Undo shares this primitive, including restoration of closed empty files.
+    let _source_guard = crate::file_access::open_without_writers(source)?;
     let source_wide = source
         .as_os_str()
         .encode_wide()
@@ -324,12 +340,13 @@ pub(crate) fn rename_without_replacement(source: &Path, destination: &Path) -> i
 fn copy_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
     use std::io::Write;
 
+    // Acquire protection before creating any destination or removing the source.
+    let mut source_file = crate::file_access::open_without_writers(source)?;
     let mut destination_file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)?;
     let copy_result = (|| {
-        let mut source_file = fs::File::open(source)?;
         io::copy(&mut source_file, &mut destination_file)?;
         destination_file.flush()?;
         fs::remove_file(source)
@@ -434,6 +451,71 @@ mod tests {
 
     fn screenshot(path: PathBuf) -> ScreenshotFile {
         ScreenshotFile::new(path, None).expect("create screenshot model")
+    }
+
+    #[test]
+    fn empty_source_is_not_renamed_or_reported_as_successful() {
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("Screenshot.png");
+        fs::write(&source, b"").unwrap();
+        let result = rename_screenshot(&mut screenshot(source.clone()), "project");
+        assert!(result.is_err());
+        assert!(source.exists());
+        assert!(!directory.path().join("project.png").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_cannot_be_truncated_during_the_move() {
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("Screenshot.png");
+        fs::write(&source, b"image").unwrap();
+        let result =
+            rename_screenshot_with(&mut screenshot(source.clone()), "project", |from, to| {
+                fs::write(from, b"")?;
+                rename_without_replacement(from, to)
+            });
+        assert!(result.is_err());
+        assert_eq!(fs::read(source).unwrap(), b"image");
+        assert!(!directory.path().join("project.png").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn active_writer_cannot_be_detached_by_copy_fallback() {
+        use std::io::Write;
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("Screenshot.png");
+        let mut writer = fs::File::create(&source).unwrap();
+        writer.write_all(b"partial image").unwrap();
+        writer.flush().unwrap();
+        let result = rename_screenshot(&mut screenshot(source.clone()), "project");
+        writer.write_all(b" completed").unwrap();
+        drop(writer);
+        assert!(
+            result.is_err(),
+            "must refuse a source with an active writer: {result:?}"
+        );
+        assert_eq!(fs::read(source).unwrap(), b"partial image completed");
+        assert!(!directory.path().join("project.png").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn copy_fallback_never_removes_a_source_that_is_still_being_written() {
+        use std::io::Write;
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("Screenshot.png");
+        let destination = directory.path().join("project.png");
+        let mut writer = fs::File::create(&source).unwrap();
+        writer.write_all(b"partial image").unwrap();
+        writer.flush().unwrap();
+        let result = super::copy_without_replacement(&source, &destination);
+        writer.write_all(b" completed").unwrap();
+        drop(writer);
+        assert!(result.is_err(), "copy must refuse an active writer");
+        assert_eq!(fs::read(source).unwrap(), b"partial image completed");
+        assert!(!destination.exists());
     }
 
     #[test]
