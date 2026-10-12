@@ -22,6 +22,34 @@ fn fixture() -> (tempfile::TempDir, ScreenshotFile) {
     (dir, file)
 }
 #[test]
+fn hybrid_does_not_treat_the_capture_tool_title_as_a_useful_topic() {
+    let (_dir, file) = fixture();
+    let file = file.with_window_context(Some(
+        screenshot_renamer_lib::screenshot_metadata::WindowContext {
+            app_name: "SnippingTool".into(),
+            window_title: Some("Snipping Tool".into()),
+        },
+    ));
+    let result = route(
+        &file,
+        &settings(ProcessingMode::Hybrid),
+        &NamingRules::default(),
+        |_| None,
+        |_| {
+            Ok(VisionResult {
+                app: Some("Google".into()),
+                topic: Some("dead hang".into()),
+                detail: Some("daily effects".into()),
+                ..Default::default()
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(result.source, AnalysisSource::Ai);
+    assert_eq!(result.candidate, "google-dead-hang-daily-effects");
+}
+
+#[test]
 fn local_uses_ocr_and_never_acquires_a_cloud_request() {
     let (_dir, file) = fixture();
     let result = route(

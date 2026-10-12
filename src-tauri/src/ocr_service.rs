@@ -175,6 +175,9 @@ fn native_analyze(path: &Path) -> Result<OcrResult, OcrError> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     let processing = |e: windows::core::Error| OcrError::ProcessingFailed(e.to_string());
     let path = std::path::absolute(path).map_err(|e| OcrError::UnreadableFile(e.to_string()))?;
+    // Watcher paths are canonical (\\?\C:\...), which StorageFile rejects.
+    // Simplify only when the legacy spelling refers to the same file.
+    let path = dunce::simplified(&path);
     let file = bounded(
         StorageFile::GetFileFromPathAsync(&HSTRING::from(path.as_os_str()))
             .map_err(|e| OcrError::UnreadableFile(e.to_string()))?,

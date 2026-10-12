@@ -18,6 +18,32 @@ fn metadata() -> ScreenshotMetadata {
     metadata
 }
 #[test]
+fn capture_tool_hints_do_not_name_the_image_when_ocr_is_empty() {
+    let mut m = metadata();
+    m.window_context = Some(WindowContext {
+        app_name: "SnippingTool".into(),
+        window_title: Some("Snipping Tool".into()),
+    });
+    m.set_ocr_text(String::new(), String::new());
+    assert_eq!(name(&m, &NamingRules::default()).unwrap(), "screenshot-0");
+}
+
+#[test]
+fn screenshot_text_names_the_content_without_a_capture_tool_prefix() {
+    let mut m = metadata();
+    m.window_context = Some(WindowContext {
+        app_name: "SnippingTool".into(),
+        window_title: Some("Snipping Tool".into()),
+    });
+    let text = "Google\nif I dead hang every day what happens";
+    m.set_ocr_text(text.into(), text.into());
+    assert_eq!(
+        name(&m, &NamingRules::default()).unwrap(),
+        "google-if-i-dead-hang-every"
+    );
+}
+
+#[test]
 fn naming_is_deterministic_with_stable_signal_priority() {
     let m = metadata();
     let rules = NamingRules::default();

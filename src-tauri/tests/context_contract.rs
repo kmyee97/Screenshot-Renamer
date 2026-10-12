@@ -2,6 +2,18 @@ use screenshot_renamer_lib::window_context::{capture_with_timeout, normalize_con
 use std::time::Duration;
 
 #[test]
+fn capture_tools_are_not_source_window_context() {
+    for app in [
+        "SnippingTool.exe",
+        "snippingtool.EXE",
+        "SnipAndSketch.exe",
+        "ScreenClippingHost.exe",
+    ] {
+        assert!(normalize_context(app, "Snipping Tool").is_none(), "{app}");
+    }
+}
+
+#[test]
 fn context_is_optional_normalized_and_ignores_renamer() {
     let context = normalize_context("Code.exe", " main.rs\n - Workspace ").unwrap();
     assert_eq!(context.app_name, "Code");

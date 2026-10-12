@@ -36,6 +36,8 @@ Names use lowercase terms, conservative stop words, Windows sanitization, and a 
 
 Windows OCR operations share a three-second deadline and cancel stalled work before fallback naming. Watcher lifecycle commands run on a background thread. Saving naming preferences preserves in-flight analysis and queued screenshots: the current screenshot retains its starting rules, and subsequent screenshots use the saved rules.
 
+Canonical watched-folder paths are simplified safely before being passed to Windows OCR. Snipping Tool, Snip & Sketch, and ScreenClippingHost are excluded from window hints and filename tokens, so saving a capture names the screenshot from its content. When OCR has no usable text, capture-tool titles do not prevent timestamp fallback or Hybrid vision analysis.
+
 ## AI privacy preferences
 
 Windows notifications default to actionable errors; success notices are opt-in in Settings. Repeated error summaries are coalesced for 30 seconds and duplicate successful history IDs are suppressed. Success is reported only after rename and history persistence. Bodies contain a short filename or fixed recovery instruction, never screenshot images, OCR text, credentials, or full paths. Delivery failure never changes the rename result. Windows may suppress toasts through system notification settings; the in-app outcome remains available. Notification delivery runs in Rust; no frontend notification permission is granted.
