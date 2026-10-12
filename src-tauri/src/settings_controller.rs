@@ -99,6 +99,12 @@ impl<W: WatchSession> SettingsController<W> {
     ) -> Result<SettingsSnapshot, String> {
         let mut settings = self.snapshot.settings.clone();
         settings.desktop = desktop;
+        self.save_background_preferences(settings)
+    }
+    fn save_background_preferences(
+        &mut self,
+        settings: ApplicationSettings,
+    ) -> Result<SettingsSnapshot, String> {
         self.store
             .as_ref()
             .map_err(Clone::clone)?
@@ -145,9 +151,10 @@ impl<W: WatchSession> SettingsController<W> {
             && settings.auto_rename == self.snapshot.settings.auto_rename
             && settings.naming == self.snapshot.settings.naming
             && settings.ai == self.snapshot.settings.ai
-            && settings.desktop != self.snapshot.settings.desktop
+            && (settings.desktop != self.snapshot.settings.desktop
+                || settings.notifications != self.snapshot.settings.notifications)
         {
-            return self.save_desktop_preferences(settings.desktop);
+            return self.save_background_preferences(settings);
         }
         // Pausing an unavailable folder must remain possible; validate a folder only when enabling or replacing it.
         settings.ai.validate().map_err(|error| error.to_string())?;

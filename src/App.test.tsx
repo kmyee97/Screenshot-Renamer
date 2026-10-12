@@ -101,6 +101,26 @@ test("minimize preference saves without changing the watched folder", async () =
   expect(screen.getByText("C:/Screenshots")).toBeInTheDocument();
 });
 
+test("success notification preference is opt-in and saves",async()=>{
+  let settings={version:1,watchedFolder:null,autoRename:false,notifications:{errors:true,successes:false}};
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==="list_analysis_failures")return [];
+    if(command==="get_recent_history")return {entries:[],undoLast:null};
+    if(command==="get_startup_enabled"||command==="has_ai_credential")return false;
+    if(command==="preview_naming")return "example";
+    if(command==="update_settings")settings=(args as {settings:typeof settings}).settings;
+    return {settings,watcherStatus:"Paused",watcherError:null,warning:null};
+  });
+  render(<App/>);
+  await waitFor(()=>expect(screen.getByRole("button",{name:"Choose folder"})).toBeEnabled());
+  fireEvent.click(screen.getByRole("button",{name:"Settings"}));
+  const success=screen.getByRole("checkbox",{name:"Notify on successful renames"});
+  expect(success).not.toBeChecked();
+  expect(screen.getByRole("checkbox",{name:"Notify on errors"})).toBeChecked();
+  fireEvent.click(success);
+  await waitFor(()=>expect(success).toBeChecked());
+});
+
 test("restores the saved folder and shows nonfatal settings warnings", async () => {
   vi.mocked(invoke).mockImplementation(async command => command === "list_analysis_failures" ? [] : command === "get_recent_history" ? { entries: [], undoLast: null } : { settings: { version: 1, watchedFolder: "C:/Screenshots", autoRename: false }, warning: "Recovered invalid settings." });
   render(<App />);

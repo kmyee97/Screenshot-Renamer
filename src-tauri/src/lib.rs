@@ -15,6 +15,7 @@ pub mod history_store;
 pub mod history_ui;
 pub mod naming_engine;
 pub mod naming_templates;
+pub mod notifications;
 pub mod ocr_service;
 pub mod ocr_text_cleaner;
 pub mod processing_mode;
@@ -256,6 +257,7 @@ fn prepare_watcher(
             tauri::async_runtime::spawn_blocking(move || {
                 let _ = publish_watcher_state(&app);
             });
+            notifications::publish(&error_app, notifications::Outcome::WatcherFailed);
         },
     )
     .map_err(|error| error.to_string())
@@ -328,6 +330,7 @@ fn process_automatic_screenshot(
     let analysis = match analysis {
         Ok(analysis) => analysis,
         Err(error) => {
+            notifications::publish(app, notifications::Outcome::AnalysisFailed);
             if let processing_mode::ProcessingError::Vision(kind) = &error {
                 let state = app.state::<AnalysisState>();
                 let mut recovery = state
@@ -690,9 +693,17 @@ fn emit_rename_result(app: &AppHandle, result: &Result<RenameHistoryView, Rename
     match result {
         Ok(history) => {
             let _ = app.emit("screenshot-renamed", history);
+            notifications::publish(
+                app,
+                notifications::Outcome::Renamed {
+                    id: &history.id,
+                    name: history.new_name.as_deref().unwrap_or(""),
+                },
+            );
         }
         Err(failure) => {
             let _ = app.emit("screenshot-rename-failed", failure);
+            notifications::publish(app, notifications::Outcome::RenameFailed);
         }
     }
 }
@@ -720,6 +731,9 @@ async fn undo_history(
     .await
     .map_err(|error| history_ui::UndoFailure::unavailable(error.to_string()))?;
     let _ = app.emit("screenshot-undo-result", event_id);
+    if result.is_err() {
+        notifications::publish(&app, notifications::Outcome::UndoFailed);
+    }
     result
 }
 
@@ -766,6 +780,7 @@ pub fn run() {
         .on_window_event(desktop::handle_window_event)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(SuppressionState::default())
         .manage(AnalysisState::default())
         .manage(WatcherPublication::default())
@@ -780,6 +795,7 @@ pub fn run() {
                     .lock()
                     .map_err(|_| "Settings unavailable")?;
                 let rules = controller.processing_settings();
+                app.manage(notifications::NotificationState::new(rules.clone()));
                 controller.restore(|folder, enabled, error| {
                     prepare_watcher(
                         &app.handle(),

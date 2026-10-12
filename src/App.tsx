@@ -13,6 +13,7 @@ import { AiSettings } from "./components/AiSettings";
 import {StartupSettings} from "./components/StartupSettings";
 import type { AiPreferences } from "./types";
 import type { DesktopPreferences } from "./types";
+import type {NotificationPreferences} from "./types";
 import "./App.css";
 
 function App() {
@@ -88,6 +89,14 @@ function App() {
       return result.enabled;
     }finally{setSavingNaming(false);}
   }
+  async function saveNotifications(notifications:NotificationPreferences){
+    if(!snapshot||choosing||toggling||savingNaming)return;
+    setSavingNaming(true);setSettingsError(null);
+    const revision=watcherEvent.current.revision;
+    try{commitResponse(await invoke<SettingsSnapshot>("update_settings",{settings:{...snapshot.settings,notifications}}),revision);}
+    catch(error){setSettingsError(errorMessage(error));}
+    finally{setSavingNaming(false);}
+  }
   useEffect(() => {
     let active = true;
     const releases: UnlistenFn[] = [];
@@ -143,6 +152,10 @@ function App() {
         {snapshot ? <label className="toggle"><input type="checkbox" checked={snapshot.settings.desktop?.minimizeToTray ?? true} disabled={choosing || toggling || savingNaming} onChange={event=>void saveDesktop({ ...snapshot.settings.desktop, minimizeToTray:event.target.checked })} /> Minimize to tray</label> : null}
         <p className="muted">Closing the window keeps active monitoring in the tray. Use tray Quit to exit.</p>
         {snapshot ? <StartupSettings disabled={choosing||toggling||savingNaming} onSave={saveStartup}/> : null}
+        {snapshot?<fieldset disabled={choosing||toggling||savingNaming}><legend>Windows notifications</legend>
+          <label className="toggle"><input type="checkbox" checked={snapshot.settings.notifications?.errors??true} onChange={event=>void saveNotifications({errors:event.target.checked,successes:snapshot.settings.notifications?.successes??false})}/> Notify on errors</label>
+          <label className="toggle"><input type="checkbox" checked={snapshot.settings.notifications?.successes??false} onChange={event=>void saveNotifications({errors:snapshot.settings.notifications?.errors??true,successes:event.target.checked})}/> Notify on successful renames</label>
+        </fieldset>:null}
         {snapshot ? <NamingSettings value={snapshot.settings.naming} disabled={choosing || toggling || savingNaming} onSave={saveNaming} /> : null}
         {snapshot ? <AiSettings value={snapshot.settings.ai} disabled={choosing || toggling || savingNaming} onSave={saveAnalysis} /> : null}
         <p className="muted">Preferences are saved on this device.</p>
