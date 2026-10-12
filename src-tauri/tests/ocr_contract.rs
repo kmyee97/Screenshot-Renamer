@@ -5,6 +5,21 @@ use screenshot_renamer_lib::{
 };
 use std::path::Path;
 
+#[cfg(windows)]
+#[test]
+fn native_windows_ocr_reads_dark_google_search_snippet() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/google-search-snippet.png");
+    // Watched folders are canonicalized, producing a verbatim Windows path.
+    let path = path.canonicalize().unwrap();
+    let result = analyze(&path).unwrap();
+    let OcrResult::Text(text) = result else {
+        panic!("expected search query, got {result:?}")
+    };
+    let text = text.to_lowercase();
+    assert!(text.contains("dead hang"), "OCR missed the query: {text}");
+}
+
 #[test]
 fn file_errors_are_typed_and_do_not_modify_files() {
     let dir = tempfile::tempdir().unwrap();

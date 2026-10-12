@@ -3248,6 +3248,7 @@ name = "screenshot-renamer"
 version = "0.1.33"
 dependencies = [
  "base64 0.23.1",
+ "dunce",
  "notify",
  "reqwest",
  "rusqlite",

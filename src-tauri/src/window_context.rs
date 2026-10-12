@@ -9,7 +9,21 @@ use std::{
     time::Duration,
 };
 
+pub(crate) fn is_capture_tool(app: &str) -> bool {
+    let Some(stem) = Path::new(app).file_stem() else {
+        return false;
+    };
+    let stem = stem.to_string_lossy();
+    ["SnippingTool", "SnipAndSketch", "ScreenClippingHost"]
+        .iter()
+        .any(|tool| stem.eq_ignore_ascii_case(tool))
+}
+
 pub fn normalize_context(app: &str, title: &str) -> Option<WindowContext> {
+    // Saving a snip foregrounds the capture UI, not the app shown in the image.
+    if is_capture_tool(app) {
+        return None;
+    }
     let app = Path::new(app).file_stem()?.to_string_lossy();
     let app: String = app.chars().filter(|c| !c.is_control()).take(40).collect();
     if app.trim().is_empty() || app.eq_ignore_ascii_case("screenshot-renamer") {

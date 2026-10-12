@@ -56,22 +56,19 @@ pub(crate) struct NamingTokens {
     pub timestamp: String,
 }
 pub(crate) fn tokens(metadata: &ScreenshotMetadata) -> NamingTokens {
+    let context = metadata
+        .window_context
+        .as_ref()
+        .filter(|context| !crate::window_context::is_capture_tool(&context.app_name));
     let text = metadata
         .cleaned_ocr_text
         .as_deref()
         .filter(|text| !text.trim().is_empty())
-        .or_else(|| {
-            metadata
-                .window_context
-                .as_ref()
-                .and_then(|context| context.window_title.as_deref())
-        })
+        .or_else(|| context.and_then(|context| context.window_title.as_deref()))
         .unwrap_or("");
     let terms = naming_terms(text);
     NamingTokens {
-        app: metadata
-            .window_context
-            .as_ref()
+        app: context
             .map(|context| naming_terms(&context.app_name).join("-"))
             .unwrap_or_default(),
         topic: metadata
