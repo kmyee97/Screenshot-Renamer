@@ -22,6 +22,8 @@ Automated verification passed for the installer implementation: 142 Rust tests, 
 
 The preserved PNG's SHA-256 was `3832FE1C2F9B24747F358EFFA305BC3513BF71637E1D09D807CA9755E754D0FA`. First launch displayed the existing missing-settings/defaults notice. The monitoring panel still has outdated copy saying content-based naming is forthcoming. Record their UX impact during clean acceptance; neither observation establishes a failed rename. Packaged notifications and tray menu interactions remain unverified.
 
+An earlier isolated native QA run reported a Windows OCR path-length error and used local fallback naming. Native OCR contract tests passed outside the restricted execution environment. Verify OCR naming on the clean machine and record any recurring warning as a defect rather than treating fallback output as proof of OCR success.
+
 ## Prepare the clean environment
 
 1. Record Windows edition/build, architecture, tester, date, WebView2 availability and any unsigned-installer prompt. Use a normal user account. Keep a VM snapshot or a clean baseline for reruns.
