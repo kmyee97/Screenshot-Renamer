@@ -8,6 +8,8 @@ This template should help get you started developing with Tauri, React and Types
 
 ## Testing
 
+Windows installer instructions and the release gate are in [docs/windows-release.md](docs/windows-release.md). Build a versioned x64 NSIS installer from a clean checkout with `pwsh -File scripts/build-windows.ps1`.
+
 The tray exposes Open, Settings, Pause/Resume and Quit. Closing the window hides it while monitoring is active; closing while paused exits. Minimize to tray is enabled by default and can be turned off in Settings. A tray failure keeps the window accessible. Tray Quit stops monitoring and exits, retaining the saved Auto Rename preference for the next launch.
 
 Run frontend unit and component tests once with `npm test`, or keep Vitest running while you work with `npm run test:watch`.
