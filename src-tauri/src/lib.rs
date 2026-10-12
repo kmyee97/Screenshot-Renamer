@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub mod ai_settings;
 pub mod credentials;
 pub mod desktop;
+mod file_access;
 pub mod filename_sanitizer;
 pub mod folder_watcher;
 pub mod history_pipeline;

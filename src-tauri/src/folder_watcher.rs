@@ -1,8 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    fs::OpenOptions,
-    io::Read,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     sync::{
@@ -105,18 +103,15 @@ pub fn wait_for_file_readiness(
 }
 
 fn file_is_ready(path: &std::path::Path, poll_interval: Duration) -> bool {
-    let Ok(initial_metadata) = std::fs::metadata(path) else {
+    // Windows create events arrive before the capture app finishes saving.
+    // A stable length alone is insufficient: the writer may be paused or empty.
+    let Ok(file) = crate::file_access::open_saved_screenshot(path) else {
         return false;
     };
-    if !initial_metadata.is_file() {
-        return false;
-    }
-
-    let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) else {
+    let Ok(initial_metadata) = file.metadata() else {
         return false;
     };
-    let mut contents = Vec::new();
-    if file.read_to_end(&mut contents).is_err() {
+    if !initial_metadata.is_file() || initial_metadata.len() == 0 {
         return false;
     }
 
@@ -125,7 +120,9 @@ fn file_is_ready(path: &std::path::Path, poll_interval: Duration) -> bool {
     let Ok(final_metadata) = std::fs::metadata(path) else {
         return false;
     };
-    final_metadata.is_file() && final_metadata.len() == initial_metadata.len()
+    final_metadata.is_file()
+        && final_metadata.len() == initial_metadata.len()
+        && final_metadata.modified().ok() == initial_metadata.modified().ok()
 }
 
 #[derive(Debug)]
@@ -456,6 +453,39 @@ mod tests {
 
         wait_for_file_readiness(&path, Duration::from_millis(500), Duration::from_millis(10))
             .unwrap();
+    }
+
+    #[test]
+    fn empty_screenshot_is_not_ready_and_is_left_in_place() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("Screenshot.png");
+        std::fs::write(&path, b"").unwrap();
+        assert!(wait_for_file_readiness(
+            &path,
+            Duration::from_millis(60),
+            Duration::from_millis(10)
+        )
+        .is_err());
+        assert_eq!(std::fs::metadata(path).unwrap().len(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stable_partial_file_is_not_ready_until_writer_closes() {
+        use std::io::Write;
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("Screenshot.png");
+        let mut writer = std::fs::File::create(&path).unwrap();
+        writer.write_all(b"partial image").unwrap();
+        writer.flush().unwrap();
+        let while_writing =
+            wait_for_file_readiness(&path, Duration::from_millis(60), Duration::from_millis(10));
+        writer.write_all(b" completed").unwrap();
+        drop(writer);
+        assert!(while_writing.is_err());
+        wait_for_file_readiness(&path, Duration::from_millis(200), Duration::from_millis(10))
+            .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"partial image completed");
     }
 
     #[test]
